@@ -9,7 +9,6 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/oneo-me/onevra/source/shells/plain"
-	"github.com/oneo-me/onevra/source/theme"
 	"my-vm/internal/logging"
 	"my-vm/internal/vm"
 )
@@ -40,6 +39,7 @@ func main() {
 	a.config, err = vm.Load(filepath.Join(root, "library.yaml"))
 	if err != nil {
 		a.loadError = err
+		a.messageError = true
 		a.message = err.Error()
 		_, _ = fmt.Fprintln(logger, err)
 	}
@@ -60,13 +60,18 @@ func main() {
 	}
 	mygo.App.SetPath(mygo.PathUserData, root)
 	mygo.App.WhenReady(func() {
-		shell := plain.NewShell(plain.ShellOptions{Title: "My VM · Windows 虚拟机管理器", Width: 1180, Height: 820, MinWidth: 960, MinHeight: 680, Theme: theme.Onevra, Content: a.view})
+		shell := plain.NewShell(plain.ShellOptions{Title: "My VM · Windows 虚拟机管理器", Width: 1240, Height: 860, MinWidth: 1040, MinHeight: 700, Theme: appTheme, Content: a.view})
 		a.window = shell.Window()
 		a.window.OnClose(func(e *mygo.CloseEvent) {
 			if a.busy || a.manager.Active() {
 				e.PreventDefault()
+				a.messageError = false
 				a.message = "请等待当前操作完成，并关闭所有虚拟机后再退出。"
 				a.window.Invalidate()
+				return
+			}
+			if !a.leavePage() {
+				e.PreventDefault()
 			}
 		})
 		a.window.OnClosed(func() { mygo.App.Quit() })

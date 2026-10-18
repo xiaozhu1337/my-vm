@@ -99,6 +99,12 @@ func TestQEMULifecycle(t *testing.T) {
 				}
 			}()
 			requireVisibleQEMUWindow(t, s.cmd.Process.Pid)
+			hwnd := guestWindow(s.cmd.Process.Pid)
+			restoreDisplay.Call(hwnd, 0) // SW_HIDE simulates a lost guest window.
+			if err := manager.ShowDisplay(machine.ID); err != nil {
+				t.Fatal(err)
+			}
+			requireVisibleQEMUWindow(t, s.cmd.Process.Pid)
 			if err := manager.Start("", machine); err == nil {
 				t.Fatal("must reject double start")
 			}
