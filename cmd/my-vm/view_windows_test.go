@@ -47,8 +47,8 @@ func TestViewNavigation(t *testing.T) {
 		t.Fatalf("edit navigation failed: page=%q texts=%q", a.page, tt.Texts())
 	}
 	click(t, tt, "取消")
-	click(t, tt, "QEMU 设置")
-	if a.page != "settings" || !tt.HasText("保存设置") {
+	click(t, tt, "Hyper-V 设置")
+	if a.page != "settings" || !tt.HasText("Hyper-V 设置") {
 		t.Fatal("settings navigation failed")
 	}
 	click(t, tt, "返回")
@@ -103,7 +103,7 @@ func TestViewBusyBlocksActions(t *testing.T) {
 	a := testApplication(t, 1)
 	a.busy = true
 	tt := testView(a, 1080, 720)
-	for _, label := range []string{"新建虚拟机", "编辑配置", "QEMU 设置", "启动虚拟机"} {
+	for _, label := range []string{"新建虚拟机", "编辑配置", "Hyper-V 设置", "启动虚拟机"} {
 		click(t, tt, label)
 	}
 	if a.page != "" || !a.busy || a.manager.Active() {
@@ -178,13 +178,13 @@ func TestViewMinimumSizeAndTheme(t *testing.T) {
 			a := testApplication(t, 21)
 			tt := testView(a, 1040, 660)
 			tt.SetDark(dark)
-			for _, label := range []string{"新建虚拟机", "上一页", "下一页", "QEMU 设置", "编辑配置", "启动虚拟机", "Windows / QEMU"} {
+			for _, label := range []string{"新建虚拟机", "上一页", "下一页", "Hyper-V 设置", "编辑配置", "启动虚拟机", "Windows / HCS"} {
 				r, ok := tt.Find(label)
 				if !ok || r.X < 0 || r.Y < 0 || r.X+r.W > 1040 || r.Y+r.H > 660 {
 					t.Fatalf("control %q outside minimum window: %v, found=%t", label, r, ok)
 				}
 			}
-			for _, page := range []struct{ name, footer string }{{"edit", "保存更改"}, {"settings", "保存设置"}} {
+			for _, page := range []struct{ name, footer string }{{"edit", "保存更改"}, {"settings", "返回"}} {
 				a.edit(a.config.Machines[0], false)
 				a.page = page.name
 				tt.Frame()

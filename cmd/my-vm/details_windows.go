@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
@@ -18,18 +17,22 @@ func (a *application) details(c *ui.Context) {
 			components.Text(c, "从一台虚拟机开始").FontSize(30).FontWeight(600)
 			muted(c, "选择安装镜像，分配资源，在独立的环境中工作。")
 			ui.Row(c).Gap(14).Children(func() {
-				components.Badge(c, "WHPX 硬件加速", components.BadgeOptions{Tone: components.BadgeAccent})
+				components.Badge(c, "Hyper-V 硬件虚拟化", components.BadgeOptions{Tone: components.BadgeAccent})
 				components.Badge(c, "按需分配磁盘")
 				components.Badge(c, "磁盘快照")
 			})
 			if action(c, "创建第一台虚拟机", true, components.ButtonPrimary) {
 				a.edit(vm.NewMachine(), true)
 			}
-			muted(c, "首次使用可先到左下角设置 QEMU 安装目录。")
+			muted(c, "启用 Hyper-V，并以管理员身份运行。")
 		})
 		return
 	}
 	state := a.manager.State(m.ID)
+	memory := m.MemoryMiB
+	if actual := a.manager.Memory(m.ID); actual > 0 {
+		memory = actual
+	}
 	off := state == "已关机"
 	ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
@@ -56,14 +59,15 @@ func (a *application) details(c *ui.Context) {
 		a.powerCard(c, m, state)
 		ui.Row(c).FillWidth().Gap(14).Children(func() {
 			metric(c, "处理器", fmt.Sprintf("%d 核", m.CPUs), "虚拟 CPU")
-			metric(c, "内存", fmt.Sprintf("%g GiB", float64(m.MemoryMiB)/1024), fmt.Sprintf("%d MiB 已分配", m.MemoryMiB))
-			metric(c, "系统磁盘", fmt.Sprintf("%d GiB", m.DiskGiB), "qcow2 / 按需占用")
+			metric(c, "内存", fmt.Sprintf("%g GiB", float64(memory)/1024), fmt.Sprintf("%d MiB 已分配", memory))
+			metric(c, "系统磁盘", fmt.Sprintf("%d GiB", m.DiskGiB), "VHDX / 按需占用")
 		})
+		a.memoryCard(c, m, state)
 		card(c, "设备与连接", "启动前可在编辑配置中调整设备。", func() {
-			infoRow(c, "加速方式", strings.ToUpper(m.Accelerator))
+			infoRow(c, "虚拟化引擎", "Hyper-V HCS")
 			network := "NAT / 共享主机网络"
 			if m.Network == "bridge" {
-				network = "桥接 / " + m.TAP
+				network = "桥接 / " + m.SwitchID
 			}
 			infoRow(c, "网络", network)
 			iso := m.ISO
@@ -71,16 +75,17 @@ func (a *application) details(c *ui.Context) {
 				iso = "未挂载 / 从硬盘启动"
 			}
 			infoRow(c, "安装光盘", iso)
-			display := "标准 VGA / 兼容显示"
-			if m.Display == "virtio" {
-				display = "virtio / 高清显示（需客户机驱动与分辨率服务）"
+			infoRow(c, "显示设备", "Hyper-V 基础控制台 / RDP 增强会话")
+			for _, s := range m.Shares {
+				mode := "只读"
+				if !s.ReadOnly {
+					mode = "可写"
+				}
+				infoRow(c, s.Name, s.Path+" / "+mode)
 			}
-			infoRow(c, "显示设备", display)
-			drivers := m.DriverISO
-			if drivers == "" {
-				drivers = "未挂载"
+			if m.Backend != "hcs" {
+				muted(c, "旧 QEMU 虚拟机：磁盘已保留，请新建 HCS 虚拟机。")
 			}
-			infoRow(c, "驱动光盘", drivers)
 			infoRow(c, "磁盘位置", vm.DiskPath(a.root, m))
 		})
 		ui.Column(c).FillWidth().Gap(10).Children(func() {
@@ -127,12 +132,17 @@ func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
 			} else if !off {
 				label = "打开画面"
 			}
-			if action(c, label, true, components.ButtonPrimary) {
+			if action(c, label, m.Backend == "hcs", components.ButtonPrimary) {
 				switch {
 				case off:
 					dir := a.config.QEMUDir
 					a.resetSnapshots()
-					a.run("启动虚拟机", func() error { return a.manager.Start(dir, m) }, nil)
+					a.run("启动虚拟机", func() error {
+						if err := a.manager.Start(dir, m); err != nil {
+							return err
+						}
+						return a.manager.ShowDisplay(m.ID)
+					}, nil)
 				case paused:
 					a.run("继续运行", func() error { return a.manager.Control(m.ID, "cont") }, nil)
 				default:
@@ -140,6 +150,9 @@ func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
 				}
 			}
 			if !off {
+				if button(c, "增强会话", !paused) {
+					a.run("打开增强会话", func() error { return a.manager.ShowDisplayMode(m.ID, true) }, nil)
+				}
 				if paused {
 					if button(c, "打开画面", true) {
 						a.run("打开客户机画面", func() error { return a.manager.ShowDisplay(m.ID) }, nil)

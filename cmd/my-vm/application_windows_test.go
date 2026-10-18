@@ -29,12 +29,7 @@ func TestUnsavedChanges(t *testing.T) {
 		t.Fatal("reverting an edit must clear the unsaved state")
 	}
 	a.page = "settings"
-	a.qemuDir = "C:/QEMU"
-	if !a.hasUnsavedChanges() {
-		t.Fatal("engine settings edit was not detected")
-	}
-	a.qemuDir = a.config.QEMUDir
 	if a.hasUnsavedChanges() {
-		t.Fatal("unchanged settings must not need confirmation")
+		t.Fatal("read-only host settings must not need confirmation")
 	}
 }

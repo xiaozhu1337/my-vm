@@ -36,6 +36,7 @@ func (a *application) editor(c *ui.Context) {
 	scrollBody(c, "editor-"+a.draft.ID, func() {
 		card(c, "基本信息", "使用容易辨认的名称来管理不同的工作环境。", func() {
 			field(c, "虚拟机名称", &a.draft.Name)
+			choice(c, "客户机系统", &a.draft.GuestOS, []string{"windows", "linux"}, map[string]string{"windows": "Windows", "linux": "Linux"})
 		})
 		card(c, "硬件资源", "资源分配影响客户机性能，请为 Windows 主机保留足够的 CPU 与内存。", func() {
 			ui.Row(c).FillWidth().Gap(20).Children(func() {
@@ -52,8 +53,24 @@ func (a *application) editor(c *ui.Context) {
 					components.NumberInput(c, &a.disk, 1, 65536, 1).Label("磁盘 GiB").FillWidth()
 				})
 			})
-			choice(c, "加速方式", &a.draft.Accelerator, []string{"whpx", "tcg"}, map[string]string{"whpx": "WHPX 硬件加速（推荐）", "tcg": "TCG 软件模拟（速度较慢）"})
-			muted(c, "qcow2 磁盘按实际使用占用空间；已有磁盘暂不支持调整容量。")
+			infoRow(c, "虚拟化引擎", "Hyper-V HCS / 硬件虚拟化")
+			memoryLabel := "内存按需分配：关闭"
+			if a.draft.DynamicMemory {
+				memoryLabel = "内存按需分配：开启"
+			}
+			if button(c, memoryLabel, true) {
+				a.draft.DynamicMemory = !a.draft.DynamicMemory
+			}
+			muted(c, "开启后允许 HCS 按需分配，并可在运行中调整内存。客户机需支持 Hyper-V 内存集成。")
+			gpuLabel := "GPU 共享：关闭"
+			if a.draft.GPUShared {
+				gpuLabel = "GPU 共享：开启"
+			}
+			if button(c, gpuLabel, true) {
+				a.draft.GPUShared = !a.draft.GPUShared
+			}
+			muted(c, "GPU 分区共享需要兼容显卡和客户机驱动；原版 Ubuntu 不含所需的 dxgkrnl 驱动。启用失败将报告错误。")
+			muted(c, "VHDX 磁盘按实际使用占用空间；已有磁盘暂不支持调整容量。")
 		})
 		card(c, "安装镜像", "安装系统时挂载 ISO；安装完成后关机，再卸载光盘。", func() {
 			field(c, "ISO 文件路径（可留空）", &a.draft.ISO)
@@ -66,28 +83,22 @@ func (a *application) editor(c *ui.Context) {
 				}
 			})
 		})
-		card(c, "显示与客户机驱动", "先使用标准 VGA 安装系统和客户机驱动，再切换高清显卡。安装驱动与服务后，桌面分辨率可跟随独立窗口大小调整。", func() {
-			choice(c, "显示设备", &a.draft.Display, []string{"std", "virtio"}, map[string]string{"virtio": "高清 virtio 显卡（Windows 10/11）", "std": "标准 VGA（安装系统/兼容显示）"})
-			if a.draft.Display == "virtio" {
-				muted(c, "请先用标准 VGA 安装系统、预装 virtio 显卡驱动及 VioGpu Resolution Service，再关机切换到高清显卡。缺少驱动时可能没有画面；自动分辨率还需要服务。")
+		card(c, "显示与共享", "基础控制台用于固件和系统安装；增强会话使用本地 RDP 通道提供高清桌面与剪贴板。", func() {
+			muted(c, "Windows 10/11 已包含 Hyper-V 显示、存储与网络驱动，不再需要 virtio 驱动光盘。增强会话需要客户机启用远程桌面服务。")
+			label := "剪贴板共享：关闭"
+			if a.draft.Clipboard {
+				label = "剪贴板共享：开启"
 			}
-			field(c, "驱动光盘 ISO（可留空）", &a.draft.DriverISO)
-			ui.Row(c).Gap(10).Children(func() {
-				if button(c, "选择驱动光盘", true) {
-					a.pickISO("选择 virtio 驱动光盘", &a.draft.DriverISO)
-				}
-				if action(c, "卸载驱动光盘", a.draft.DriverISO != "", components.ButtonGhost) {
-					a.draft.DriverISO = ""
-				}
-			})
-			muted(c, "驱动光盘与安装光盘可同时挂载。旧系统若无兼容驱动，请选择标准 VGA。")
+			if button(c, label, true) {
+				a.draft.Clipboard = !a.draft.Clipboard
+			}
+			muted(c, "增强会话允许文本、图片与文件复制粘贴；实际可用格式受客户机策略和应用支持限制。")
 		})
-		card(c, "网络连接", "默认 NAT 直接共享主机网络，无需配置额外网卡。", func() {
-			choice(c, "网络方式", &a.draft.Network, []string{"nat", "bridge"}, map[string]string{"nat": "NAT / 共享主机网络", "bridge": "桥接 / 已配置的 TAP 网卡"})
-			if a.draft.Network == "bridge" {
-				field(c, "TAP 网卡名称", &a.draft.TAP)
-				muted(c, "填写 Windows 网络连接中 TAP 网卡的准确名称，并预先将其与物理网卡建立网络桥。")
-			}
+		a.shareEditor(c)
+		card(c, "网络连接", "NAT 使用 Hyper-V 默认交换机；桥接使用预先创建的外部交换机。", func() {
+			choice(c, "网络方式", &a.draft.Network, []string{"nat", "bridge"}, map[string]string{"nat": "NAT / Hyper-V 默认交换机", "bridge": "桥接 / Hyper-V 外部交换机"})
+			field(c, "Hyper-V 交换机 ID（NAT 可留空）", &a.draft.SwitchID)
+			muted(c, "可在左下角 Hyper-V 设置中查看交换机名称和 ID。桥接需要已连接物理网卡的外部交换机。")
 		})
 	})
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {

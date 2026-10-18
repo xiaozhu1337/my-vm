@@ -5,15 +5,20 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 
 	"github.com/egoist/mygo"
+	"my-vm/internal/hcs"
 	"my-vm/internal/logging"
 	"my-vm/internal/vm"
 )
 
 type application struct {
+	runtimeMemory                           float64
+	runtimeMemoryID                         string
+	networks                                []hcs.Network
 	root                                    string
 	logger                                  *logging.Logger
 	manager                                 *vm.Manager
@@ -72,10 +77,16 @@ func (a *application) machine() (vm.Machine, bool) {
 }
 
 func (a *application) edit(m vm.Machine, creating bool) {
+	if m.GuestOS == "" {
+		m.GuestOS = "windows"
+	}
 	if m.Display == "" {
 		m.Display = "std"
 	}
-	a.draft, a.savedDraft = m, m
+	m.Shares = slices.Clone(m.Shares)
+	a.draft = m
+	m.Shares = slices.Clone(m.Shares)
+	a.savedDraft = m
 	a.creating = creating
 	a.cpu = float64(m.CPUs)
 	a.memory = float64(m.MemoryMiB)
@@ -129,9 +140,9 @@ func (a *application) saveDraft() {
 func (a *application) hasUnsavedChanges() bool {
 	switch a.page {
 	case "edit":
-		return a.draft != a.savedDraft || a.cpu != float64(a.savedDraft.CPUs) || a.memory != float64(a.savedDraft.MemoryMiB) || a.disk != float64(a.savedDraft.DiskGiB)
+		return !reflect.DeepEqual(a.draft, a.savedDraft) || a.cpu != float64(a.savedDraft.CPUs) || a.memory != float64(a.savedDraft.MemoryMiB) || a.disk != float64(a.savedDraft.DiskGiB)
 	case "settings":
-		return a.qemuDir != a.config.QEMUDir
+		return false
 	}
 	return false
 }

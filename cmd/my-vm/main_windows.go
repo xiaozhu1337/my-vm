@@ -9,7 +9,9 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/oneo-me/onevra/source/shells/plain"
+	"my-vm/internal/console"
 	"my-vm/internal/logging"
+	"my-vm/internal/media"
 	"my-vm/internal/vm"
 )
 
@@ -25,6 +27,26 @@ func main() {
 		return
 	}
 	defer logger.Close()
+	if len(os.Args) > 1 && os.Args[1] == "--build-guest-media" {
+		if len(os.Args) != 4 {
+			err = fmt.Errorf("需要指定客户机工具目录和输出 ISO 路径")
+		} else {
+			err = media.CreateISO(os.Args[2], os.Args[3])
+		}
+		if err != nil {
+			fmt.Fprintln(logger, err)
+			fmt.Fprintln(os.Stderr, err)
+			logger.Close()
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--console" {
+		if err = console.Run(os.Args[2:], logger); err != nil {
+			fmt.Fprintln(logger, err)
+		}
+		return
+	}
 	mygo.App.SetName("My VM")
 	if !mygo.App.RequestSingleInstanceLock() {
 		return

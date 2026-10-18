@@ -1,41 +1,38 @@
+//go:build windows
+
 package vm
 
 import (
 	"errors"
+	"fmt"
+	"golang.org/x/sys/windows"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
-var (
-	displayUser32  = windows.NewLazySystemDLL("user32.dll")
-	enumDisplays   = displayUser32.NewProc("EnumWindows")
-	displayPID     = displayUser32.NewProc("GetWindowThreadProcessId")
-	displayClass   = displayUser32.NewProc("GetClassNameW")
-	restoreDisplay = displayUser32.NewProc("ShowWindow")
-	focusDisplay   = displayUser32.NewProc("SetForegroundWindow")
-)
-
-var (
-	displayMu    sync.Mutex
-	displayFound uintptr
-)
-
-// Windows callbacks consume a permanent slot, so reuse one for every search.
+var displayUser32 = windows.NewLazySystemDLL("user32.dll")
+var restoreDisplay = displayUser32.NewProc("ShowWindow")
+var focusDisplay = displayUser32.NewProc("SetForegroundWindow")
+var displayMu sync.Mutex
+var displayFound uintptr
 var displayCallback = syscall.NewCallback(func(hwnd, owner uintptr) uintptr {
 	var pid uint32
-	displayPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-	if pid != uint32(owner) {
-		return 1
-	}
-	var class [256]uint16
-	displayClass.Call(hwnd, uintptr(unsafe.Pointer(&class[0])), uintptr(len(class)))
-	if strings.HasPrefix(windows.UTF16ToString(class[:]), "SDL") {
-		displayFound = hwnd
-		return 0
+	displayUser32.NewProc("GetWindowThreadProcessId").Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if pid == uint32(owner) {
+		var name [128]uint16
+		displayUser32.NewProc("GetClassNameW").Call(hwnd, uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)))
+		if windows.UTF16ToString(name[:]) != "" {
+			var title [256]uint16
+			displayUser32.NewProc("GetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+			if strings.HasPrefix(windows.UTF16ToString(title[:]), "VM · ") {
+				displayFound = hwnd
+				return 0
+			}
+		}
 	}
 	return 1
 })
@@ -44,26 +41,75 @@ func guestWindow(pid int) uintptr {
 	displayMu.Lock()
 	defer displayMu.Unlock()
 	displayFound = 0
-	enumDisplays.Call(displayCallback, uintptr(pid))
+	displayUser32.NewProc("EnumWindows").Call(displayCallback, uintptr(pid))
 	return displayFound
 }
-
-func (m *Manager) ShowDisplay(id string) error {
+func (m *Manager) ShowDisplay(id string) error { return m.ShowDisplayMode(id, false) }
+func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	m.mu.Lock()
 	s := m.sessions[id]
-	pid := 0
-	if s != nil {
-		pid = s.cmd.Process.Pid
-	}
 	m.mu.Unlock()
-	if pid == 0 {
+	if s == nil {
 		return errors.New("虚拟机未运行")
 	}
-	hwnd := guestWindow(pid)
-	if hwnd == 0 {
-		return errors.New("客户机窗口尚未就绪，请稍后重试")
+	if s.console != nil && s.consoleEnhanced != enhanced {
+		_ = s.console.Process.Kill()
+		m.mu.Lock()
+		s.console = nil
+		m.mu.Unlock()
 	}
-	restoreDisplay.Call(hwnd, 9) // SW_RESTORE also restores a minimized guest window.
-	focusDisplay.Call(hwnd)
+	if s.console != nil {
+		hwnd := guestWindow(s.console.Process.Pid)
+		if hwnd != 0 {
+			restoreDisplay.Call(hwnd, 9)
+			focusDisplay.Call(hwnd)
+			return nil
+		}
+		return errors.New("客户机控制台正在启动，请稍后重试")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	pipe := basicPipe(s.machine)
+	if enhanced {
+		pipe = `\\.\pipe\my-vm-` + id + ".enhanced"
+	}
+	args := []string{"--console", "--pipe", pipe, "--vmid", s.runtimeID, "--title", s.machine.Name}
+	if enhanced {
+		args = append(args, "--enhanced")
+	}
+	if enhanced && s.machine.GuestOS == "linux" {
+		args = append(args, "--linux")
+	}
+	if enhanced && s.machine.Clipboard {
+		args = append(args, "--clipboard")
+	}
+	command := exec.Command(executable, args...)
+	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+	command.Stdout = m.Log
+	command.Stderr = m.Log
+	if err = command.Start(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	s.console = command
+	s.consoleEnhanced = enhanced
+	m.mu.Unlock()
+	go func() {
+		err := command.Wait()
+		m.opMu.Lock()
+		m.mu.Lock()
+		if s.console == command {
+			s.console = nil
+		}
+		m.mu.Unlock()
+		m.opMu.Unlock()
+		if err != nil && m.Log != nil {
+			fmt.Fprintln(m.Log, "控制台退出:", err)
+		}
+	}()
 	return nil
 }

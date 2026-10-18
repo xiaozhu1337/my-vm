@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,64 +10,47 @@ import (
 
 func TestConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "library.yaml")
-	cfg, err := Load(path)
-	if err != nil || len(cfg.Machines) != 0 {
-		t.Fatalf("missing config: %v", err)
+	if cfg, err := Load(path); err != nil || len(cfg.Machines) != 0 {
+		t.Fatal(cfg, err)
 	}
-	machine := NewMachine()
-	machine.Name = "Windows 中文测试"
-	machine.ISO = `C:\ISO images\安装,光盘.iso`
-	machine.DriverISO = `C:\ISO images\virtio,驱动.iso`
-	want := Config{QEMUDir: `C:\Program Files\qemu`, Machines: []Machine{machine}}
-	if err = Save(path, want); err != nil {
-		t.Fatal(err)
-	}
-	// Saving over an existing file must work on Windows as well.
-	if err = Save(path, want); err != nil {
-		t.Fatal(err)
+	m := NewMachine()
+	m.Name = "Windows 中文测试"
+	m.ISO = `C:\ISO images\安装,光盘.iso`
+	m.DriverISO = `C:\ISO images\附加.iso`
+	m.Shares = []Share{{Name: "Files", Path: `C:\shared`, ReadOnly: true}}
+	want := Config{QEMUDir: `C:\legacy\qemu`, Machines: []Machine{m}}
+	for range 2 {
+		if err := Save(path, want); err != nil {
+			t.Fatal(err)
+		}
 	}
 	got, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %#v want %#v", got, want)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v want %#v error %v", got, want, err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.HasPrefix(string(data), "\xef\xbb\xbf") || !strings.Contains(string(data), "# 虚拟 CPU 数量") {
-		t.Fatal("configuration must be commented UTF-8 without BOM")
-	}
-	if err = os.WriteFile(path, []byte("machines: [broken"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = Load(path); err == nil {
-		t.Fatal("must reject damaged YAML")
-	}
-	data, _ = os.ReadFile(path)
-	if string(data) != "machines: [broken" {
-		t.Fatal("must preserve damaged file")
+		t.Fatal("expected commented UTF-8 without BOM")
 	}
 }
-
 func TestConfigRejectsUnknownFieldsAndDocuments(t *testing.T) {
-	for _, input := range []string{"machine: []\n", "machines: []\n---\nmachines: []\n", "machines:\n  - id: abc\n    unexpected: true\n"} {
+	for _, input := range []string{"machines: [broken", "machine: []\n", "machines: []\n---\nmachines: []\n", "machines:\n  - id: abc\n    unexpected: true\n"} {
 		path := filepath.Join(t.TempDir(), "library.yaml")
 		if err := os.WriteFile(path, []byte(input), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := Load(path); err == nil {
-			t.Fatalf("accepted invalid config %q", input)
+			t.Fatalf("accepted %q", input)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil || string(data) != input {
-			t.Fatal("invalid configuration changed")
+			t.Fatal("damaged configuration changed")
 		}
 	}
 }
-
 func TestValidate(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -81,9 +63,12 @@ func TestValidate(t *testing.T) {
 		{"name", func(m *Machine) { m.Name = " " }},
 		{"network", func(m *Machine) { m.Network = "unknown" }},
 		{"bridge missing", func(m *Machine) { m.Network = "bridge" }},
-		{"bridge injection", func(m *Machine) { m.Network = "bridge"; m.TAP = "tap,script=evil" }},
-		{"display", func(m *Machine) { m.Display = "unknown" }},
-		{"accel", func(m *Machine) { m.Accelerator = "kvm" }},
+		{"backend", func(m *Machine) { m.Backend = "unknown" }},
+		{"legacy accel", func(m *Machine) { m.Backend = "qemu"; m.Accelerator = "tcg" }},
+		{"duplicate share", func(m *Machine) {
+			m.Shares = []Share{{Name: "Files", Path: `C:\share`}, {Name: "files", Path: `C:\other`}}
+		}},
+		{"relative share", func(m *Machine) { m.Shares = []Share{{Name: "Files", Path: "relative"}} }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := NewMachine()
@@ -94,66 +79,28 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
-
-func TestArguments(t *testing.T) {
+func TestConfiguration(t *testing.T) {
 	m := NewMachine()
-	m.Name = "Windows 中文,测试"
-	m.Display = "virtio"
-	m.ISO = `C:\ISO images\安装,光盘.iso`
-	m.DriverISO = `C:\ISO images\virtio,驱动.iso`
-	root := `C:\VM library,中文`
-	args, err := Arguments(root, m, "127.0.0.1:12345")
+	m.ISO = `C:\安装,光盘.iso`
+	m.DriverISO = `C:\附加.iso`
+	m.Shares = []Share{{Name: "Files", Path: `C:\shared`, ReadOnly: true}}
+	cfg, err := Configuration(`C:\VM,中文`, m, "endpoint-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := map[string][]string{}
-	for i := 0; i < len(args); i += 2 {
-		values[args[i]] = append(values[args[i]], args[i+1])
+	virtual := cfg["VirtualMachine"].(map[string]any)
+	if cfg["SchemaVersion"].(map[string]int)["Minor"] < 5 || virtual["Services"].(map[string]any)["Shutdown"] == nil {
+		t.Fatal("integration-service shutdown requires schema 2.5 and an explicit service")
 	}
-	if values["-name"][0] != "guest=Windows 中文,,测试" {
-		t.Fatalf("wrong escaped guest name: %v", args)
+	devices := virtual["Devices"].(map[string]any)
+	attachments := devices["Scsi"].(map[string]any)["my-vm-scsi"].(map[string]any)["Attachments"].(map[string]any)
+	if attachments["0"].(map[string]any)["Path"] != DiskPath(`C:\VM,中文`, m) || attachments["1"].(map[string]any)["Path"] != m.ISO || attachments["2"].(map[string]any)["Path"] != m.DriverISO {
+		t.Fatal("disk or ISO path changed")
 	}
-	if values["-accel"][0] != "whpx" || values["-netdev"][0] != "user,id=net0" {
-		t.Fatalf("wrong defaults: %v", args)
+	if cfg["ShouldTerminateOnLastHandleClosed"] != true {
+		t.Fatal("orphaned VM protection missing")
 	}
-	var disk struct {
-		File struct {
-			Filename string `json:"filename"`
-		} `json:"file"`
-	}
-	if err = json.Unmarshal([]byte(values["-blockdev"][0]), &disk); err != nil {
-		t.Fatal(err)
-	}
-	if disk.File.Filename != filepath.ToSlash(DiskPath(root, m)) {
-		t.Fatal("disk path was altered")
-	}
-	if err = json.Unmarshal([]byte(values["-blockdev"][1]), &disk); err != nil {
-		t.Fatal(err)
-	}
-	if disk.File.Filename != filepath.ToSlash(m.ISO) {
-		t.Fatal("ISO path was altered")
-	}
-	if values["-vga"][0] != "none" || !strings.Contains(strings.Join(values["-device"], "|"), "virtio-vga,edid=on,max_outputs=1") {
-		t.Fatalf("missing HD display: %v", args)
-	}
-	if err = json.Unmarshal([]byte(values["-blockdev"][2]), &disk); err != nil {
-		t.Fatal(err)
-	}
-	var drivers map[string]any
-	if err = json.Unmarshal([]byte(values["-blockdev"][2]), &drivers); err != nil {
-		t.Fatal(err)
-	}
-	if disk.File.Filename != filepath.ToSlash(m.DriverISO) || drivers["read-only"] != true || drivers["node-name"] != "drivers" || !strings.Contains(strings.Join(values["-device"], "|"), "ide-cd,drive=drivers,bus=sata.2") {
-		t.Fatal("driver ISO must preserve its path and mount read-only in a separate drive")
-	}
-	m.Network = "bridge"
-	m.TAP = "TAP 测试"
-	m.ISO = ""
-	args, err = Arguments(root, m, "127.0.0.1:12345")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.Join(args, "|"), "tap,id=net0,ifname=TAP 测试,script=no,downscript=no") {
-		t.Fatalf("bridge missing: %v", args)
+	if devices["VideoMonitor"] == nil || devices["EnhancedModeVideo"] == nil {
+		t.Fatal("console configuration missing")
 	}
 }

@@ -3,16 +3,14 @@ package vm
 import (
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
-func TestRealQcow2Snapshots(t *testing.T) {
-	if _, err := exec.LookPath("qemu-img"); err != nil {
-		t.Skip("qemu-img is not installed")
-	}
+func TestVHDXSnapshots(t *testing.T) {
 	manager := NewManager(t.TempDir(), io.Discard)
 	machine := NewMachine()
 	machine.DiskGiB = 1
@@ -20,140 +18,128 @@ func TestRealQcow2Snapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	disk := DiskPath(manager.Root, machine)
-	before, err := os.Stat(disk)
+	before, err := os.ReadFile(disk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.CreateDisk("", machine); err == nil {
-		t.Fatal("must refuse to replace an existing disk")
+	if string(before[:8]) != "vhdxfile" {
+		t.Fatal("not VHDX")
 	}
-	after, err := os.Stat(disk)
-	if err != nil || before.Size() != after.Size() {
-		t.Fatal("existing disk changed")
+	if err = manager.CreateDisk("", machine); err == nil {
+		t.Fatal("existing disk overwritten")
 	}
 	if err = manager.Snapshot("", machine, "-c", "baseline"); err != nil {
 		t.Fatal(err)
 	}
 	if err = manager.Snapshot("", machine, "-c", "baseline"); err == nil {
-		t.Fatal("must reject duplicate snapshot")
+		t.Fatal("duplicate snapshot accepted")
 	}
-	snapshots, err := manager.Snapshots("", machine)
-	if err != nil || len(snapshots) != 1 || snapshots[0].Name != "baseline" {
-		t.Fatalf("snapshots=%v err=%v", snapshots, err)
+	list, err := manager.Snapshots("", machine)
+	if err != nil || len(list) != 1 || list[0].Name != "baseline" {
+		t.Fatal(list, err)
 	}
-	// Reject names that can address a numeric ID in some QEMU versions.
-	for _, action := range []string{"-c", "-a", "-d"} {
-		if err = manager.Snapshot("", machine, action, "1"); err == nil {
-			t.Fatal("must reject numeric snapshot names")
+	for _, name := range []string{"1", "../outside", "-unsafe"} {
+		if err = manager.Snapshot("", machine, "-c", name); err == nil {
+			t.Fatal("unsafe name accepted")
 		}
+	}
+	if err = os.WriteFile(disk, []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	if err = manager.Snapshot("", machine, "-a", "baseline"); err != nil {
 		t.Fatal(err)
 	}
+	after, err := os.ReadFile(disk)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("restore changed original disk contents", err)
+	}
 	if err = manager.Snapshot("", machine, "-d", "baseline"); err != nil {
 		t.Fatal(err)
 	}
-	snapshots, err = manager.Snapshots("", machine)
-	if err != nil || len(snapshots) != 0 {
-		t.Fatalf("snapshots=%v err=%v", snapshots, err)
+	if list, err = manager.Snapshots("", machine); err != nil || len(list) != 0 {
+		t.Fatal(list, err)
 	}
 	if err = manager.Snapshot("", machine, "-a", "missing"); err == nil {
-		t.Fatal("must reject missing snapshot")
+		t.Fatal("missing snapshot accepted")
 	}
-	if err = manager.Snapshot("", machine, "-c", "-unsafe"); err == nil {
-		t.Fatal("must reject unsafe name")
+}
+func TestSnapshotRejectsExternalWriter(t *testing.T) {
+	root := t.TempDir()
+	source, target := filepath.Join(root, "disk.vhdx"), filepath.Join(root, "copy.vhdx")
+	if err := os.WriteFile(source, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := windows.UTF16PtrFromString(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(path, windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	if err := copyExclusive(source, target); err == nil {
+		t.Fatal("disk with an external writer was copied")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("failed copy left an output", err)
 	}
 }
 
-func TestQEMULifecycle(t *testing.T) {
+func TestHCSLifecycle(t *testing.T) {
 	if os.Getenv("MY_VM_INTEGRATION") != "1" {
-		t.Skip("set MY_VM_INTEGRATION=1 to open a real QEMU display")
+		t.Skip("set MY_VM_INTEGRATION=1 for real HCS lifecycle")
 	}
-	for _, mode := range []struct{ accel, display string }{{"tcg", "std"}, {"tcg", "virtio"}, {"whpx", "std"}, {"whpx", "virtio"}} {
-		t.Run(mode.accel+"/"+mode.display, func(t *testing.T) {
-			manager := NewManager(t.TempDir(), io.Discard)
-			machine := NewMachine()
-			machine.Name = "TCG/WHPX 中文,测试"
-			machine.DiskGiB = 1
-			machine.MemoryMiB = 256
-			machine.CPUs = 1
-			machine.Accelerator = mode.accel
-			machine.Display = mode.display
-			machine.DriverISO = filepath.Join(manager.Root, "drivers.iso")
-			machine.ISO = filepath.Join(manager.Root, "installer.iso")
-			// Empty media exercises both independent read-only CD frontends without booting an installer.
-			for _, iso := range []string{machine.ISO, machine.DriverISO} {
-				if err := os.WriteFile(iso, make([]byte, 64*1024), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := manager.CreateDisk("", machine); err != nil {
-				t.Fatal(err)
-			}
-			if err := manager.Start("", machine); err != nil {
-				t.Fatal(err)
-			}
-			manager.mu.Lock()
-			s := manager.sessions[machine.ID]
-			manager.mu.Unlock()
-			if s == nil {
-				t.Fatal("QEMU exited after handshake")
-			}
-			defer func() {
-				_ = s.cmd.Process.Kill()
-				select {
-				case <-s.done:
-				case <-time.After(5 * time.Second):
-					t.Error("QEMU did not exit")
-				}
-			}()
-			requireVisibleQEMUWindow(t, s.cmd.Process.Pid)
-			hwnd := guestWindow(s.cmd.Process.Pid)
-			requirePerMonitorDPI(t, hwnd)
-			restoreDisplay.Call(hwnd, 0) // SW_HIDE simulates a lost guest window.
-			if err := manager.ShowDisplay(machine.ID); err != nil {
-				t.Fatal(err)
-			}
-			requireVisibleQEMUWindow(t, s.cmd.Process.Pid)
-			if err := manager.Start("", machine); err == nil {
-				t.Fatal("must reject double start")
-			}
-			if err := manager.Snapshot("", machine, "-c", "busy"); err == nil {
-				t.Fatal("must reject snapshot of running VM")
-			}
-			if err := manager.Control(machine.ID, "stop"); err != nil {
-				t.Fatal(err)
-			}
-			if manager.State(machine.ID) != "已暂停" {
-				t.Fatal("pause state missing")
-			}
-			if err := manager.Control(machine.ID, "cont"); err != nil {
-				t.Fatal(err)
-			}
-			if manager.State(machine.ID) != "运行中" {
-				t.Fatal("resume state missing")
-			}
-			// Windows QEMU does not reliably enforce image locks; the manager must reject every image operation.
-			if _, err := manager.Snapshots("", machine); err == nil {
-				t.Fatal("must reject reading snapshots of a running VM")
-			}
-			if err := manager.Control(machine.ID, "system_powerdown"); err != nil {
-				t.Fatal(err)
-			}
-			if err := manager.Control(machine.ID, "kill"); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-s.done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("QEMU did not exit")
-			}
-			if manager.Active() {
-				t.Fatal("stale session after exit")
-			}
-			if _, err := os.Stat(filepath.Join(manager.Root, "machines", machine.ID, "disk.qcow2")); err != nil {
-				t.Fatal("disk lost after shutdown")
-			}
-		})
+	manager := NewManager(t.TempDir(), io.Discard)
+	machine := NewMachine()
+	machine.DiskGiB = 1
+	machine.MemoryMiB = 512
+	machine.Shares = []Share{{Name: "Probe", Path: t.TempDir(), ReadOnly: true}}
+	machine.CPUs = 1
+	if err := manager.CreateDisk("", machine); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start("", machine); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if manager.Active() {
+			_ = manager.Control(machine.ID, "kill")
+		}
+	}()
+	if err := manager.Start("", machine); err == nil {
+		t.Fatal("double start accepted")
+	}
+	for _, command := range []string{"stop", "cont"} {
+		if err := manager.Control(machine.ID, command); err != nil {
+			t.Fatal(err)
+		}
+		want := "运行中"
+		if command == "stop" {
+			want = "已暂停"
+		}
+		if manager.State(machine.ID) != want {
+			t.Fatal("state not updated")
+		}
+	}
+	if _, err := manager.Snapshots("", machine); err == nil {
+		t.Fatal("running snapshot access accepted")
+	}
+	if err := manager.Snapshot("", machine, "-c", "busy"); err == nil {
+		t.Fatal("running snapshot accepted")
+	}
+	if err := manager.Control(machine.ID, "kill"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for manager.Active() && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if manager.Active() {
+		t.Fatal("stale running state")
+	}
+	if _, err := os.Stat(filepath.Join(manager.Root, "machines", machine.ID, "disk.vhdx")); err != nil {
+		t.Fatal("disk lost", err)
 	}
 }

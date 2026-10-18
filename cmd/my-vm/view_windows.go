@@ -119,7 +119,7 @@ func (a *application) sidebar(c *ui.Context) {
 		if a.page == "settings" {
 			variant = components.ButtonSecondary
 		}
-		if components.Button(c, "QEMU 设置", variant).FillWidth().MinHeight(38).Clicked() && a.leavePage() {
+		if components.Button(c, "Hyper-V 设置", variant).FillWidth().MinHeight(38).Clicked() && a.leavePage() {
 			a.page = "settings"
 			a.qemuDir = a.config.QEMUDir
 		}
@@ -147,6 +147,6 @@ func (a *application) statusBar(c *ui.Context) {
 				a.report(err)
 			}
 		}
-		muted(c, "Windows / QEMU")
+		muted(c, "Windows / HCS")
 	})
 }
