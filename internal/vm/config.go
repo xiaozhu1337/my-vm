@@ -22,6 +22,8 @@ type Machine struct {
 	MemoryMiB   int    `yaml:"memory_mib"`
 	DiskGiB     int    `yaml:"disk_gib"`
 	ISO         string `yaml:"iso"`
+	DriverISO   string `yaml:"driver_iso"`
+	Display     string `yaml:"display"`
 	Network     string `yaml:"network"`
 	TAP         string `yaml:"tap"`
 	Accelerator string `yaml:"accelerator"`
@@ -42,7 +44,7 @@ func NewMachine() Machine {
 	if _, err := rand.Read(id[:]); err != nil {
 		panic(err)
 	}
-	return Machine{ID: hex.EncodeToString(id[:]), Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, DiskGiB: 64, Network: "nat", Accelerator: "whpx"}
+	return Machine{ID: hex.EncodeToString(id[:]), Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, DiskGiB: 64, Network: "nat", Accelerator: "whpx", Display: "std"}
 }
 
 func (m Machine) Validate() error {
@@ -61,6 +63,8 @@ func (m Machine) Validate() error {
 		return errors.New("网络模式必须为 nat 或 bridge")
 	case m.Network == "bridge" && (strings.TrimSpace(m.TAP) == "" || strings.ContainsAny(m.TAP, ",\r\n")):
 		return errors.New("桥接模式需要有效的 TAP 网卡名称，名称不能含逗号或换行")
+	case m.Display != "" && m.Display != "std" && m.Display != "virtio":
+		return errors.New("显示设备必须为 std 或 virtio")
 	case m.Accelerator != "whpx" && m.Accelerator != "tcg":
 		return errors.New("加速器必须为 whpx 或 tcg")
 	}
@@ -109,6 +113,8 @@ func Save(path string, cfg Config) error {
 		"id":       "内部唯一标识；请勿修改。", "name": "虚拟机显示名称。", "cpus": "虚拟 CPU 数量。",
 		"memory_mib": "内存大小，单位 MiB。", "disk_gib": "创建时的磁盘容量，单位 GiB；修改此字段不会调整磁盘。",
 		"iso": "安装光盘 ISO 的绝对路径；留空表示不挂载光盘。", "network": "网络模式：nat 或 bridge。",
+		"driver_iso":  "客户机驱动光盘 ISO 的绝对路径；作为第二张只读光盘挂载，可与安装光盘同时使用。",
+		"display":     "virtio 使用高清显卡，Windows 需安装 virtio 显卡驱动和分辨率服务；std 或留空为兼容 VGA。",
 		"tap":         "bridge 模式使用的 Windows TAP 网卡名称；须事先与物理网卡建立网络桥。",
 		"accelerator": "whpx 使用 Windows Hypervisor Platform；tcg 使用软件模拟。",
 	}

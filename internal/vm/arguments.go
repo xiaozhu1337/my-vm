@@ -13,14 +13,23 @@ func Arguments(root string, m Machine, qmpAddress string) ([]string, error) {
 		return nil, err
 	}
 	block := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	// Auxiliary virtual consoles create hidden SDL windows that can be mistaken for the guest display.
 	args := []string{"-name", "guest=" + strings.ReplaceAll(m.Name, ",", ",,"), "-machine", "q35", "-accel", m.Accelerator, "-smp", strconv.Itoa(m.CPUs), "-m", strconv.Itoa(m.MemoryMiB),
-		"-display", "sdl", "-vga", "std", "-device", "ich9-ahci,id=sata",
+		"-display", "sdl", "-monitor", "none", "-serial", "none", "-parallel", "none", "-device", "ich9-ahci,id=sata",
 		"-blockdev", block(map[string]any{"driver": "qcow2", "node-name": "osdisk", "file": map[string]any{"driver": "file", "filename": filepath.ToSlash(DiskPath(root, m))}}),
 		"-device", "ide-hd,drive=osdisk,bus=sata.0", "-qmp", "tcp:" + qmpAddress}
+	if m.Display == "virtio" {
+		args = append(args, "-vga", "none", "-device", "virtio-vga,edid=on,max_outputs=1")
+	} else {
+		args = append(args, "-vga", "std")
+	}
 	if m.ISO != "" {
 		args = append(args, "-blockdev", block(map[string]any{"driver": "raw", "node-name": "cdrom", "read-only": true, "file": map[string]any{"driver": "file", "filename": filepath.ToSlash(m.ISO)}}), "-device", "ide-cd,drive=cdrom,bus=sata.1", "-boot", "order=dc,menu=on")
 	} else {
 		args = append(args, "-boot", "order=c,menu=on")
+	}
+	if m.DriverISO != "" {
+		args = append(args, "-blockdev", block(map[string]any{"driver": "raw", "node-name": "drivers", "read-only": true, "file": map[string]any{"driver": "file", "filename": filepath.ToSlash(m.DriverISO)}}), "-device", "ide-cd,drive=drivers,bus=sata.2")
 	}
 	backend := "user,id=net0"
 	if m.Network == "bridge" {

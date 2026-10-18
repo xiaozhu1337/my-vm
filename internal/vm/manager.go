@@ -73,16 +73,19 @@ func (m *Manager) Start(dir string, machine Machine) error {
 	if _, err := os.Stat(DiskPath(m.Root, machine)); err != nil {
 		return fmt.Errorf("磁盘不可用: %w", err)
 	}
-	if machine.ISO != "" {
-		if !filepath.IsAbs(machine.ISO) {
-			return errors.New("ISO 必须使用绝对路径")
+	for _, iso := range []struct{ name, path string }{{"安装光盘", machine.ISO}, {"驱动光盘", machine.DriverISO}} {
+		if iso.path == "" {
+			continue
 		}
-		info, err := os.Stat(machine.ISO)
+		if !filepath.IsAbs(iso.path) {
+			return fmt.Errorf("%s ISO 必须使用绝对路径", iso.name)
+		}
+		info, err := os.Stat(iso.path)
 		if err != nil {
-			return fmt.Errorf("ISO 不可用: %w", err)
+			return fmt.Errorf("%s ISO 不可用: %w", iso.name, err)
 		}
 		if info.IsDir() {
-			return errors.New("ISO 路径不能是目录")
+			return fmt.Errorf("%s ISO 路径不能是目录", iso.name)
 		}
 	}
 	exe, err := executable(dir, "qemu-system-x86_64")
@@ -99,6 +102,7 @@ func (m *Manager) Start(dir string, machine Machine) error {
 		return err
 	}
 	cmd := exec.Command(exe, args...)
+	cmd.Env = append(os.Environ(), "SDL_WINDOWS_DPI_AWARENESS=permonitorv2")
 	hideConsole(cmd)
 	s := &session{cmd: cmd, done: make(chan struct{}), output: &tailWriter{log: m.Log}}
 	cmd.Stdout = s.output

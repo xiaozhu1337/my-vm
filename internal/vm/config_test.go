@@ -18,6 +18,7 @@ func TestConfigRoundTrip(t *testing.T) {
 	machine := NewMachine()
 	machine.Name = "Windows 中文测试"
 	machine.ISO = `C:\ISO images\安装,光盘.iso`
+	machine.DriverISO = `C:\ISO images\virtio,驱动.iso`
 	want := Config{QEMUDir: `C:\Program Files\qemu`, Machines: []Machine{machine}}
 	if err = Save(path, want); err != nil {
 		t.Fatal(err)
@@ -81,6 +82,7 @@ func TestValidate(t *testing.T) {
 		{"network", func(m *Machine) { m.Network = "unknown" }},
 		{"bridge missing", func(m *Machine) { m.Network = "bridge" }},
 		{"bridge injection", func(m *Machine) { m.Network = "bridge"; m.TAP = "tap,script=evil" }},
+		{"display", func(m *Machine) { m.Display = "unknown" }},
 		{"accel", func(m *Machine) { m.Accelerator = "kvm" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -96,7 +98,9 @@ func TestValidate(t *testing.T) {
 func TestArguments(t *testing.T) {
 	m := NewMachine()
 	m.Name = "Windows 中文,测试"
+	m.Display = "virtio"
 	m.ISO = `C:\ISO images\安装,光盘.iso`
+	m.DriverISO = `C:\ISO images\virtio,驱动.iso`
 	root := `C:\VM library,中文`
 	args, err := Arguments(root, m, "127.0.0.1:12345")
 	if err != nil {
@@ -128,6 +132,19 @@ func TestArguments(t *testing.T) {
 	}
 	if disk.File.Filename != filepath.ToSlash(m.ISO) {
 		t.Fatal("ISO path was altered")
+	}
+	if values["-vga"][0] != "none" || !strings.Contains(strings.Join(values["-device"], "|"), "virtio-vga,edid=on,max_outputs=1") {
+		t.Fatalf("missing HD display: %v", args)
+	}
+	if err = json.Unmarshal([]byte(values["-blockdev"][2]), &disk); err != nil {
+		t.Fatal(err)
+	}
+	var drivers map[string]any
+	if err = json.Unmarshal([]byte(values["-blockdev"][2]), &drivers); err != nil {
+		t.Fatal(err)
+	}
+	if disk.File.Filename != filepath.ToSlash(m.DriverISO) || drivers["read-only"] != true || drivers["node-name"] != "drivers" || !strings.Contains(strings.Join(values["-device"], "|"), "ide-cd,drive=drivers,bus=sata.2") {
+		t.Fatal("driver ISO must preserve its path and mount read-only in a separate drive")
 	}
 	m.Network = "bridge"
 	m.TAP = "TAP 测试"

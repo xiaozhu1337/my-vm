@@ -69,15 +69,24 @@ func TestQEMULifecycle(t *testing.T) {
 	if os.Getenv("MY_VM_INTEGRATION") != "1" {
 		t.Skip("set MY_VM_INTEGRATION=1 to open a real QEMU display")
 	}
-	for _, accel := range []string{"tcg", "whpx"} {
-		t.Run(accel, func(t *testing.T) {
+	for _, mode := range []struct{ accel, display string }{{"tcg", "std"}, {"tcg", "virtio"}, {"whpx", "std"}, {"whpx", "virtio"}} {
+		t.Run(mode.accel+"/"+mode.display, func(t *testing.T) {
 			manager := NewManager(t.TempDir(), io.Discard)
 			machine := NewMachine()
 			machine.Name = "TCG/WHPX 中文,测试"
 			machine.DiskGiB = 1
 			machine.MemoryMiB = 256
 			machine.CPUs = 1
-			machine.Accelerator = accel
+			machine.Accelerator = mode.accel
+			machine.Display = mode.display
+			machine.DriverISO = filepath.Join(manager.Root, "drivers.iso")
+			machine.ISO = filepath.Join(manager.Root, "installer.iso")
+			// Empty media exercises both independent read-only CD frontends without booting an installer.
+			for _, iso := range []string{machine.ISO, machine.DriverISO} {
+				if err := os.WriteFile(iso, make([]byte, 64*1024), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := manager.CreateDisk("", machine); err != nil {
 				t.Fatal(err)
 			}
@@ -100,6 +109,7 @@ func TestQEMULifecycle(t *testing.T) {
 			}()
 			requireVisibleQEMUWindow(t, s.cmd.Process.Pid)
 			hwnd := guestWindow(s.cmd.Process.Pid)
+			requirePerMonitorDPI(t, hwnd)
 			restoreDisplay.Call(hwnd, 0) // SW_HIDE simulates a lost guest window.
 			if err := manager.ShowDisplay(machine.ID); err != nil {
 				t.Fatal(err)

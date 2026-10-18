@@ -72,6 +72,9 @@ func (a *application) machine() (vm.Machine, bool) {
 }
 
 func (a *application) edit(m vm.Machine, creating bool) {
+	if m.Display == "" {
+		m.Display = "std"
+	}
 	a.draft, a.savedDraft = m, m
 	a.creating = creating
 	a.cpu = float64(m.CPUs)
@@ -207,13 +210,13 @@ func (a *application) snapshot(m vm.Machine, action, name string) {
 	})
 }
 
-func (a *application) pickISO() {
+func (a *application) pickISO(title string, target *string) {
 	a.busy = true
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.window, Title: "选择安装光盘", Filters: []mygo.FileFilter{{Name: "ISO 镜像", Extensions: []string{"iso"}}}})
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.window, Title: title, Filters: []mygo.FileFilter{{Name: "ISO 镜像", Extensions: []string{"iso"}}}})
 	a.busy = false
 	if err != nil {
 		a.report(err)
 	} else if len(paths) > 0 {
-		a.draft.ISO = paths[0]
+		*target = paths[0]
 	}
 }

@@ -59,12 +59,28 @@ func (a *application) editor(c *ui.Context) {
 			field(c, "ISO 文件路径（可留空）", &a.draft.ISO)
 			ui.Row(c).Gap(10).Children(func() {
 				if button(c, "浏览 ISO 文件", true) {
-					a.pickISO()
+					a.pickISO("选择安装光盘", &a.draft.ISO)
 				}
 				if action(c, "卸载光盘", a.draft.ISO != "", components.ButtonGhost) {
 					a.draft.ISO = ""
 				}
 			})
+		})
+		card(c, "显示与客户机驱动", "先使用标准 VGA 安装系统和客户机驱动，再切换高清显卡。安装驱动与服务后，桌面分辨率可跟随独立窗口大小调整。", func() {
+			choice(c, "显示设备", &a.draft.Display, []string{"std", "virtio"}, map[string]string{"virtio": "高清 virtio 显卡（Windows 10/11）", "std": "标准 VGA（安装系统/兼容显示）"})
+			if a.draft.Display == "virtio" {
+				muted(c, "请先用标准 VGA 安装系统、预装 virtio 显卡驱动及 VioGpu Resolution Service，再关机切换到高清显卡。缺少驱动时可能没有画面；自动分辨率还需要服务。")
+			}
+			field(c, "驱动光盘 ISO（可留空）", &a.draft.DriverISO)
+			ui.Row(c).Gap(10).Children(func() {
+				if button(c, "选择驱动光盘", true) {
+					a.pickISO("选择 virtio 驱动光盘", &a.draft.DriverISO)
+				}
+				if action(c, "卸载驱动光盘", a.draft.DriverISO != "", components.ButtonGhost) {
+					a.draft.DriverISO = ""
+				}
+			})
+			muted(c, "驱动光盘与安装光盘可同时挂载。旧系统若无兼容驱动，请选择标准 VGA。")
 		})
 		card(c, "网络连接", "默认 NAT 直接共享主机网络，无需配置额外网卡。", func() {
 			choice(c, "网络方式", &a.draft.Network, []string{"nat", "bridge"}, map[string]string{"nat": "NAT / 共享主机网络", "bridge": "桥接 / 已配置的 TAP 网卡"})

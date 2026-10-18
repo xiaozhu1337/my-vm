@@ -71,6 +71,16 @@ func (a *application) details(c *ui.Context) {
 				iso = "未挂载 / 从硬盘启动"
 			}
 			infoRow(c, "安装光盘", iso)
+			display := "标准 VGA / 兼容显示"
+			if m.Display == "virtio" {
+				display = "virtio / 高清显示（需客户机驱动与分辨率服务）"
+			}
+			infoRow(c, "显示设备", display)
+			drivers := m.DriverISO
+			if drivers == "" {
+				drivers = "未挂载"
+			}
+			infoRow(c, "驱动光盘", drivers)
 			infoRow(c, "磁盘位置", vm.DiskPath(a.root, m))
 		})
 		ui.Column(c).FillWidth().Gap(10).Children(func() {
