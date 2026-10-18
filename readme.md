@@ -75,7 +75,7 @@ mise exec go@1.27.2 -- go vet ./...
 mise exec go@1.27.2 -- go test ./internal/vm -run TestQEMULifecycle -v -count=1
 ```
 
-该测试会短暂打开 TCG、WHPX QEMU 窗口，使用临时空磁盘验证启动、重复启动保护、暂停、继续、关机请求、强制退出及运行中快照保护，不会安装操作系统或更改主机网络。WHPX 不可用时该项会失败。
+该测试会短暂打开 TCG、WHPX QEMU 窗口，使用临时空磁盘验证 SDL 客户机窗口可见性、启动、重复启动保护、暂停、继续、关机请求、强制退出及运行中快照保护，不会安装操作系统或更改主机网络。WHPX 不可用时该项会失败。
 
 ## 首版范围
 

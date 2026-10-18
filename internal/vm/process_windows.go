@@ -9,7 +9,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func hideConsole(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} }
+func hideConsole(cmd *exec.Cmd) {
+	// HideWindow also hides SDL; suppress only the console so the guest window stays visible.
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+}
 
 type processJob struct{ handle windows.Handle }
 

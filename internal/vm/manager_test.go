@@ -98,6 +98,7 @@ func TestQEMULifecycle(t *testing.T) {
 					t.Error("QEMU did not exit")
 				}
 			}()
+			requireVisibleQEMUWindow(t, s.cmd.Process.Pid)
 			if err := manager.Start("", machine); err == nil {
 				t.Fatal("must reject double start")
 			}
