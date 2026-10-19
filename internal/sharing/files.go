@@ -113,6 +113,18 @@ func Open(shares []Share) (http.Handler, func(), error) {
 		return nil, nil, err
 	}
 	mux := http.NewServeMux()
+	parents := &webdav.Handler{FileSystem: directoryFS{shares}, LockSystem: webdav.NewMemLS()}
+	parentHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "OPTIONS" && r.Method != "PROPFIND" {
+			w.Header().Set("Allow", "OPTIONS, PROPFIND")
+			http.Error(w, "virtual directory is read-only", http.StatusMethodNotAllowed)
+			return
+		}
+		parents.ServeHTTP(w, r)
+	})
+	mux.Handle("/{$}", parentHandler)
+	mux.Handle("/dav", parentHandler)
+	mux.Handle("/dav/{$}", parentHandler)
 	var roots []*os.Root
 	closeAll := func() {
 		for _, r := range roots {

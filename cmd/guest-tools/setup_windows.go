@@ -6,16 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/windows/svc"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc/mgr"
+	"my-vm/internal/guestagent"
 	"my-vm/internal/sharing"
 )
 
@@ -29,26 +31,11 @@ func installUser() error {
 		return err
 	}
 	target := filepath.Join(root, "MyVMGuestTools", "my-vm-guest.exe")
-	if err = copySelf(target); err != nil {
-		return err
-	}
-	run, _, err := registry.CreateKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE)
+	source, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	err = run.SetStringValue("MyVMGuestTools", `"`+target+`"`)
-	run.Close()
-	if err != nil {
-		return err
-	}
-	if err = elevatePrepare(target); err != nil {
-		return err
-	}
-	cmd := exec.Command(target)
-	if err = cmd.Start(); err != nil {
-		return err
-	}
-	return cmd.Process.Release()
+	return guestagent.Upgrade(source, target, elevatePrepare, guestagent.StartAgent, func() error { return guestagent.SetStartup(target, true) })
 }
 func prepareSystem() error {
 	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\WebClient\Parameters`, registry.SET_VALUE)
@@ -88,10 +75,29 @@ func startService(manager *mgr.Mgr, name string) error {
 		return err
 	}
 	err = service.Start()
-	if errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
-		return nil
+	if err != nil && !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
+		return err
 	}
-	return err
+	return waitService(name, service.Query, 20*time.Second)
+}
+func waitService(name string, query func() (svc.Status, error), timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := query()
+		if err != nil {
+			return fmt.Errorf("查询服务 %s: %w", name, err)
+		}
+		if status.State == svc.Running {
+			return nil
+		}
+		if status.State == svc.Stopped {
+			return fmt.Errorf("服务 %s 未启动，退出码 %d", name, status.Win32ExitCode)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("等待服务 %s 启动超时（状态 %d）", name, status.State)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 func connection(drive string) (string, error) {
 	var buffer [2048]uint16

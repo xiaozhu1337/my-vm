@@ -60,7 +60,7 @@ func Start(runtimeID string, shares []Share, log io.Writer) (*Service, error) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(shares)
 	})
-	mux.Handle("/dav/", handler)
+	mux.Handle("/", handler)
 	server := &http.Server{ErrorLog: stdlog.New(log, "Shared folders: ", 0), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Minute, WriteTimeout: 10 * time.Minute, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32768}
 	result := &Service{server: server, listener: listener, closeRoots: closeRoots}
 	failed = false

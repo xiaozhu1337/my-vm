@@ -17,7 +17,15 @@ const Port uint32 = 19027
 const ProxyAddress = "127.0.0.1:18389"
 
 func RunProxy(ctx context.Context, log io.Writer, mapShares func([]Share) error) error {
+	return RunProxyReady(ctx, log, mapShares, nil, nil)
+}
+
+// RunProxyReady distinguishes local startup from successful host folder mapping.
+func RunProxyReady(ctx context.Context, log io.Writer, mapShares func([]Share) error, ready, mapped func(error)) error {
 	listener, err := net.Listen("tcp", ProxyAddress)
+	if ready != nil {
+		ready(err)
+	}
 	if err != nil {
 		return err
 	}
@@ -50,10 +58,17 @@ func RunProxy(ctx context.Context, log io.Writer, mapShares func([]Share) error)
 				}
 				response.Body.Close()
 				if err == nil {
-					if err = mapShares(shares); err == nil {
+					err = mapShares(shares)
+					if mapped != nil {
+						mapped(err)
+					}
+					if err == nil {
 						return
 					}
 				}
+			}
+			if mapped != nil {
+				mapped(err)
 			}
 			if log != nil {
 				fmt.Fprintln(log, "Shared folders:", err)

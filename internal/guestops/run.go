@@ -11,7 +11,15 @@ import (
 )
 
 func Run(ctx context.Context, log io.Writer) {
+	RunReady(ctx, log, nil)
+}
+
+// RunReady reports local listener startup without waiting for the host to connect.
+func RunReady(ctx context.Context, log io.Writer, ready func(error)) {
 	listener, err := listen()
+	if ready != nil {
+		ready(err)
+	}
 	if err != nil {
 		fmt.Fprintln(log, "客户机命令服务:", err)
 		return

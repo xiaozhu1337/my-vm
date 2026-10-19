@@ -23,7 +23,7 @@ func installationResult(err error) {
 	if errors.Is(err, errPreparationReported) {
 		return
 	}
-	text := "增强安装完成。已启用共享目录、远程桌面和登录自启动。\n请确认此账户设置了登录密码，然后在主机点击“增强桌面”。"
+	text := "增强安装完成，代理已启动并启用登录自启动。\n右下角托盘可查看共享连接状态、开关自启动或打开日志。\n请确认此账户设置了登录密码，然后在主机点击“增强桌面”。"
 	flags := uintptr(0x40)
 	if err != nil {
 		logDirectory := `MyVMGuestTools\logs`
