@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -34,7 +33,6 @@ func linuxWaylandBridge(runtimeID string, log io.Writer) (int, func(), error) {
 func serveWaylandBridge(listener net.Listener, dial func(context.Context) (net.Conn, error), log io.Writer) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	var workers sync.WaitGroup
 	active := make(chan struct{}, 4)
 	go func() {
 		defer close(done)
@@ -48,7 +46,7 @@ func serveWaylandBridge(listener net.Listener, dial func(context.Context) (net.C
 			}
 			select {
 			case active <- struct{}{}:
-				workers.Go(func() {
+				go func() {
 					defer func() { <-active }()
 					defer incoming.Close()
 					closeIncoming := context.AfterFunc(ctx, func() { incoming.Close() })
@@ -61,10 +59,13 @@ func serveWaylandBridge(listener net.Listener, dial func(context.Context) (net.C
 						return
 					}
 					defer outgoing.Close()
+					if ctx.Err() != nil {
+						return
+					}
 					closeOutgoing := context.AfterFunc(ctx, func() { outgoing.Close() })
 					defer closeOutgoing()
 					relay(incoming, outgoing)
-				})
+				}()
 			default:
 				incoming.Close()
 			}
@@ -74,6 +75,6 @@ func serveWaylandBridge(listener net.Listener, dial func(context.Context) (net.C
 		cancel()
 		listener.Close()
 		<-done
-		workers.Wait()
+		// Pending ConnectEx calls may ignore cancellation; late connections close above.
 	}
 }

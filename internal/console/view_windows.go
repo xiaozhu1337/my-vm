@@ -117,6 +117,8 @@ func Run(args []string, log io.Writer) error {
 	defer runtime.UnlockOSThread()
 	flags := flag.NewFlagSet("console", flag.ContinueOnError)
 	v := &viewer{log: log}
+	var x11 bool
+	var probe string
 	current = v
 	defer func() { current = nil }()
 	flags.StringVar(&v.pipe, "pipe", "", "")
@@ -126,14 +128,26 @@ func Run(args []string, log io.Writer) error {
 	flags.BoolVar(&v.clipboard, "clipboard", false, "")
 	flags.BoolVar(&v.linux, "linux", false, "")
 	flags.BoolVar(&v.wayland, "wayland", false, "")
+	flags.BoolVar(&x11, "x11", false, "")
+	flags.StringVar(&probe, "detect-desktop", "", "")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || v.wayland && (!v.enhanced || !v.linux) {
+	if probe != "" && flags.NArg() == 0 && v.pipe == "" && !v.enhanced && !v.linux && !v.wayland && !x11 {
+		kind, err := queryLinuxSession(probe)
+		if err == nil {
+			fmt.Fprintln(os.Stdout, kind)
+		}
+		return err
+	}
+	if flags.NArg() != 0 || (v.wayland || x11) && (!v.enhanced || !v.linux) || v.wayland && x11 {
 		return fmt.Errorf("控制台会话参数无效")
 	}
 	if !strings.HasPrefix(v.pipe, `\\.\pipe\my-vm-`) {
 		return fmt.Errorf("控制台仅接受 My VM 本地管道")
+	}
+	if v.enhanced && v.linux && !v.wayland && !x11 {
+		v.wayland = detectLinuxWayland(v.vmid, log)
 	}
 	if v.wayland {
 		port, stop, err := linuxWaylandBridge(v.vmid, log)
@@ -178,12 +192,14 @@ func Run(args []string, log io.Writer) error {
 	font, _, _ := windows.NewLazySystemDLL("gdi32.dll").NewProc("GetStockObject").Call(17)
 	user32.NewProc("SendMessageW").Call(v.header, 0x30, font, 1)
 	defer v.close()
-	if err := v.initialize(); err != nil {
-		v.fail(err)
-	} else {
-		v.setStatus(mode + " · 正在连接客户机…")
+	v.setStatus(mode + " · 正在连接客户机…")
+	if v.wayland {
+		v.setStatus("正在连接 Linux 桌面 · 请完成凭据和证书确认，窗口将保持打开")
 	}
 	user32.NewProc("ShowWindow").Call(v.hwnd, 5)
+	if err := v.initialize(); err != nil {
+		v.fail(err)
+	}
 	user32.NewProc("SetTimer").Call(v.hwnd, 1, 300, 0)
 	var msg message
 	for {
@@ -229,10 +245,8 @@ func (v *viewer) initialize() error {
 		if err = v.client.PutQueryInterface(ole.NewGUID("{28904001-04B6-436C-A55B-0AF1A0883DC9}"), &v.displayClient); err != nil {
 			return err
 		}
-		if !v.linux {
-			if err = v.initializeEvents(); err != nil {
-				return err
-			}
+		if err = v.initializeEvents(); err != nil {
+			return err
 		}
 	}
 	v.advanced, err = property(v.client, "AdvancedSettings9")
@@ -284,6 +298,9 @@ func (v *viewer) initialize() error {
 	}
 	if v.wayland {
 		if err = call(v.nonScriptable, 63, 0xffff); err != nil {
+			return err
+		}
+		if err = call(v.nonScriptable, 47, 0xffff); err != nil {
 			return err
 		}
 	}

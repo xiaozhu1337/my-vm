@@ -61,7 +61,7 @@ dist\my-vm-guest-tools-linux.iso
 
 NAT 自动选网使用 Windows 保留标识对应的 `Default Switch`，不会把 WSL 的其他 ICS 网络当作默认交换机。Default Switch 提供 DHCP；找不到时明确报错。显式指定交换机时由该网络提供 DHCP 或客户机配置静态地址。若旧版本已接入 WSL 交换机，请正常关闭客户机并用新版重新启动，让网卡重新接入正确网络；无需重装系统。
 
-完整操作见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland；GNOME 安装时设置远程桌面专用凭据，KDE 使用当前 Linux 账户密码。连接时通过原生 RDP 窗口认证，密码不写入清单。旧的 `guest_os: linux` 继续使用 X11/xrdp，可在编辑页切换；细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
+完整操作见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland；GNOME 安装时设置远程桌面专用凭据，KDE 使用当前 Linux 账户密码。连接时通过原生 RDP 窗口认证，密码不写入清单。旧的 `guest_os: linux` 未指定桌面类型时，通过已运行的客户机代理识别 X11/Wayland；探测失败时保留 X11/xrdp，也可在编辑页明确选择。细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
 
 命令行示例见 [command-line.md](docs/command-line.md)。Windows 10、Ubuntu 26 自动安装的可行方案及交付前条件见 [automatic-installation.md](docs/automatic-installation.md)，本轮尚未提供无人值守安装复选框。
 

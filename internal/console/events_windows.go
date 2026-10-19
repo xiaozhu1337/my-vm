@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
+	"github.com/go-ole/go-ole/oleutil"
 )
 
 var sessionEventIID = ole.NewGUID("{336D5562-EFA8-482E-8CB3-C5C0FC7A7DB6}")
@@ -60,6 +61,9 @@ var sessionEventTable = [7]uintptr{
 			*allow = -1
 		}
 		this.viewer.sessionEvent(id)
+		if this.viewer.wayland && !this.viewer.closed && id == 4 && args != nil && args.count == 1 && args.values != nil && args.values.VT == ole.VT_I4 {
+			this.viewer.disconnected(int32(args.values.Val))
+		}
 		return 0
 	}),
 }
@@ -72,10 +76,35 @@ func (v *viewer) sessionEvent(id int32) {
 	case 1, 4, 17, 34:
 		v.loggedIn = false
 		v.display = displayUpdate{}
+		if id == 1 && v.wayland {
+			v.setStatus("正在连接 Linux 桌面 · 请完成凭据和证书确认，窗口将保持打开")
+		}
+	case 18:
+		if v.wayland {
+			v.setStatus("请核对并确认 Linux 远程桌面的证书 · 窗口将保持打开")
+		}
+	case 19:
+		if v.wayland {
+			v.setStatus("正在连接 Linux 桌面 · 请完成剩余的登录提示")
+		}
 	case 3, 33:
 		v.loggedIn = true
 		v.display = displayUpdate{}
 	}
+}
+
+func (v *viewer) disconnected(reason int32) {
+	extended := int32(0)
+	if value, err := oleutil.GetProperty(v.client, "ExtendedDisconnectReason"); err == nil && value != nil {
+		extended = int32(value.Val)
+		_ = value.Clear()
+	}
+	description := ""
+	if value, err := oleutil.CallMethod(v.client, "GetErrorDescription", uint32(reason), uint32(extended)); err == nil && value != nil {
+		description = value.ToString()
+		_ = value.Clear()
+	}
+	v.fail(fmt.Errorf("增强会话已断开（原因 %d，扩展 %d）: %s 若使用 GNOME，请先在基础控制台登录并解锁桌面，再重新连接。", reason, extended, description))
 }
 
 func (v *viewer) initializeEvents() error {

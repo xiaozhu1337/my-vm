@@ -56,10 +56,7 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 		return errors.New("虚拟机未运行")
 	}
 	if s.console != nil && s.consoleEnhanced != enhanced {
-		_ = s.console.Process.Kill()
-		m.mu.Lock()
-		s.console = nil
-		m.mu.Unlock()
+		return errors.New("请先手动关闭现有控制台窗口，再切换基础/增强模式；虚拟机将继续运行")
 	}
 	if s.console != nil {
 		hwnd := guestWindow(s.console.Process.Pid)
@@ -86,6 +83,8 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 		args = append(args, "--linux")
 		if s.machine.DesktopMode() == "wayland" {
 			args = append(args, "--wayland")
+		} else if s.machine.LinuxDesktop == "x11" {
+			args = append(args, "--x11")
 		}
 	}
 	if enhanced && s.machine.Clipboard {

@@ -34,3 +34,25 @@ func TestSessionEventsRequireLoginBeforeWindowsDisplayUpdates(t *testing.T) {
 		t.Fatal("closed viewer accepted a late event")
 	}
 }
+
+func TestWaylandAuthenticationEventsKeepConsoleOpen(t *testing.T) {
+	v := &viewer{enhanced: true, linux: true, wayland: true}
+	for _, event := range []int32{1, 18, 19} {
+		v.sessionEvent(event)
+		if v.closed || v.status == "" || v.loggedIn {
+			t.Fatalf("authentication event %d closed or completed the console: %+v", event, v)
+		}
+	}
+	if v.status != "正在连接 Linux 桌面 · 请完成剩余的登录提示" {
+		t.Fatal("certificate dismissal was treated as login completion", v.status)
+	}
+	v.sessionEvent(3)
+	if !v.loggedIn || v.closed {
+		t.Fatal("login did not keep the console available")
+	}
+	v.setStatus("增强会话已断开：客户机桌面已锁定")
+	v.sessionEvent(4)
+	if v.closed || v.loggedIn || v.status != "增强会话已断开：客户机桌面已锁定" {
+		t.Fatal("disconnect closed the console or hid the error", v.status)
+	}
+}
