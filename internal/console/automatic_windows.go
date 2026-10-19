@@ -58,10 +58,23 @@ func queryDisplay(runtimeID, kind string) (displayCapability, error) {
 		return displayCapability{}, err
 	}
 	defer client.CloseIdleConnections()
+	if kind == "wayland-login" {
+		return legacyDisplayFromGuest(client, "wayland")
+	}
 	return displayFromGuest(client, kind)
 }
 
 func displayFromGuest(client *http.Client, kind string) (displayCapability, error) {
+	if status, err := guestops.ReadStatus(context.Background(), client); err == nil {
+		if protocolAvailability(status, kind) != "ready" {
+			return displayCapability{}, errors.New("guest desktop is not ready")
+		}
+		return displayCapability{Mode: status.Desktop.Mode}, nil
+	}
+	return legacyDisplayFromGuest(client, kind)
+}
+
+func legacyDisplayFromGuest(client *http.Client, kind string) (displayCapability, error) {
 	args := []string{"/bin/sh", "-c", linuxDisplayQuery}
 	data, err := json.Marshal(guestops.Command{Args: args, Timeout: 2})
 	if err != nil {
@@ -142,7 +155,7 @@ func probeDisplay(runtimeID, kind string, log io.Writer) displayCapability {
 	if err != nil {
 		return displayCapability{}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "--console", "--detect-display", runtimeID, kind)
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
@@ -210,6 +223,19 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 	if v.closed {
 		return
 	}
+	var capability displayCapability
+	if enhanced && v.linux {
+		kind := v.linuxMode
+		if kind == "" {
+			kind = "linux"
+		}
+		capability = probeDisplay(v.vmid, kind, v.log)
+		defer clear(capability.Password)
+		if capability.Mode == "" {
+			v.fail(errors.New("客户机增强画面尚未就绪，保留当前画面"))
+			return
+		}
+	}
 	hwnd, header, headerClose := v.hwnd, v.header, v.headerClose
 	headerHidden, toolbar := v.headerHidden, v.toolbar
 	v.clearPrompt()
@@ -222,10 +248,9 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 	*v = viewer{hwnd: hwnd, header: header, headerClose: headerClose, headerHidden: headerHidden, toolbar: toolbar,
 		pipe: pipe, vmid: runtimeID, title: title, log: log, automatic: automatic, enhanced: enhanced, linux: linux, clipboard: clipboard, linuxMode: linuxMode, machineID: machineID}
 	if enhanced && linux {
-		v.wayland = linuxMode == "wayland" || linuxMode == "" && detectLinuxWayland(runtimeID, log)
+		v.wayland = capability.Mode == "wayland"
 	}
 	if v.wayland {
-		capability := probeDisplay(runtimeID, "wayland", log)
 		v.automaticLogin = capability.login()
 		port, stop, err := linuxWaylandBridge(runtimeID, log)
 		if err != nil {

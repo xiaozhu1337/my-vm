@@ -28,9 +28,17 @@ func TestMain(m *testing.M) {
 		if state == "legacy-slow" {
 			if strings.HasSuffix(os.Args[4], "-status") {
 				time.Sleep(2 * time.Second)
-				fmt.Println("unknown")
+				fmt.Println("unavailable")
 			} else {
 				time.Sleep(1500 * time.Millisecond)
+				fmt.Println("ready")
+			}
+			os.Exit(0)
+		}
+		if state == "known-unknown" {
+			if strings.HasSuffix(os.Args[4], "-status") {
+				fmt.Println("unknown")
+			} else {
 				fmt.Println("ready")
 			}
 			os.Exit(0)
@@ -80,10 +88,30 @@ func TestDesktopProbeProcess(t *testing.T) {
 			if got := detectLinuxWayland(test.kind, io.Discard); got != test.want {
 				t.Fatalf("got %v, want %v", got, test.want)
 			}
-			if elapsed := time.Since(started); elapsed > 5*time.Second {
+			if elapsed := time.Since(started); elapsed > 10*time.Second {
 				t.Fatalf("probe was not bounded: %v", elapsed)
 			}
 		})
+	}
+}
+
+func TestLinuxSessionTypeUsesProtocolEvenWhenLocked(t *testing.T) {
+	for _, test := range []struct{ os, mode, state, want string }{
+		{"linux", "wayland", "waiting", "wayland"}, {"linux", "x11", "ready", "x11"}, {"linux", "", "unsupported", ""}, {"windows", "windows", "ready", ""},
+	} {
+		calls := 0
+		client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if r.Method != "GET" || r.URL.Path != "/v1/status" {
+				t.Fatal("session detection used an external command")
+			}
+			data, _ := json.Marshal(guestops.Status{Protocol: 1, OS: test.os, Desktop: guestops.DesktopStatus{Mode: test.mode, State: test.state}})
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+		})}
+		got, err := linuxSessionType(client)
+		if got != test.want || (err == nil) != (test.want != "") || calls != 1 {
+			t.Fatalf("session type=%s err=%v calls=%d", got, err, calls)
+		}
 	}
 }
 
@@ -102,6 +130,9 @@ func TestLinuxSessionType(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &http.Client{Transport: desktopTransport(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/v1/status" {
+					return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("old agent"))}, nil
+				}
 				if request.Method != "POST" || request.URL.Path != "/exec" {
 					t.Fatalf("unexpected request: %s %s", request.Method, request.URL)
 				}

@@ -250,7 +250,7 @@ func Run(args []string, log io.Writer) error {
 	}
 	if displayProbe != "" && probe == "" && readinessProbe == "" && flags.NArg() == 1 && v.pipe == "" && !v.enhanced && !v.automatic && !v.linux && !v.wayland && !x11 {
 		kind := flags.Arg(0)
-		if kind != "windows" && kind != "linux" && kind != "wayland" && kind != "x11" {
+		if kind != "windows" && kind != "linux" && kind != "wayland" && kind != "x11" && kind != "wayland-login" {
 			return fmt.Errorf("控制台会话参数无效")
 		}
 		capability, err := queryDisplay(displayProbe, kind)

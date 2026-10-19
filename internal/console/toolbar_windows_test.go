@@ -213,6 +213,7 @@ func TestEnhancedAvailabilityProbeIsBoundedAndConservative(t *testing.T) {
 	}{
 		{"ready", "windows", "ready"}, {"waiting", "windows", "waiting"},
 		{"available", "windows", "available"}, {"unknown", "windows", "unknown"},
+		{"known-unknown", "linux", "unknown"},
 		{"garbage", "windows", "unknown"}, {"ready", "wayland", "ready"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

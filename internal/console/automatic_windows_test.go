@@ -18,12 +18,12 @@ import (
 )
 
 func TestProtocolAvailabilityRespectsModeAndState(t *testing.T) {
-	for _, test := range []struct{ os, mode, state, kind, want string }{{"linux", "wayland", "ready", "windows", "unsupported"}, {"windows", "windows", "ready", "windows", "ready"}, {"windows", "windows", "available", "windows", "available"}, {"linux", "wayland", "waiting", "linux", "waiting"}, {"linux", "wayland", "ready", "x11", "unsupported"}, {"windows", "windows", "ready", "linux", "unsupported"}, {"linux", "x11", "unsupported", "linux", "unsupported"}} {
+	for _, test := range []struct{ os, mode, state, kind, want string }{{"linux", "wayland", "unknown", "linux", "unknown"}, {"linux", "wayland", "ready", "windows", "unsupported"}, {"windows", "windows", "ready", "windows", "ready"}, {"windows", "windows", "available", "windows", "available"}, {"linux", "wayland", "waiting", "linux", "waiting"}, {"linux", "wayland", "ready", "x11", "unsupported"}, {"windows", "windows", "ready", "linux", "unsupported"}, {"linux", "x11", "unsupported", "linux", "unsupported"}} {
 		status := guestops.Status{Protocol: 1, OS: test.os, Desktop: guestops.DesktopStatus{Mode: test.mode, State: test.state}}
-		if test.want == "unsupported" {
+		if test.want == "unsupported" || test.want == "unknown" {
 			bar := &consoleToolbar{availability: enhancedAvailability{results: make(chan string, 1)}}
 			bar.availability.results <- protocolAvailability(status, test.kind)
-			v := &viewer{toolbar: bar, display: displayUpdate{connected: true}, log: io.Discard}
+			v := &viewer{linux: test.os == "linux", toolbar: bar, display: displayUpdate{connected: true}, log: io.Discard}
 			v.enhancedAvailabilityResult()
 			if bar.prompt != promptNone {
 				t.Fatal("mismatched guest triggered an invitation")
@@ -32,6 +32,62 @@ func TestProtocolAvailabilityRespectsModeAndState(t *testing.T) {
 		if got := protocolAvailability(status, test.kind); got != test.want {
 			t.Fatalf("status mode mapping got %s want %s", got, test.want)
 		}
+	}
+}
+
+func TestLinuxDisplayUsesProtocolBeforeLegacyCommands(t *testing.T) {
+	for _, test := range []struct {
+		os, mode, state, kind string
+		fail                  bool
+	}{
+		{"linux", "x11", "ready", "linux", false}, {"linux", "wayland", "ready", "linux", false},
+		{"linux", "wayland", "waiting", "linux", true}, {"linux", "wayland", "unknown", "linux", true},
+		{"linux", "wayland", "ready", "x11", true}, {"windows", "windows", "ready", "linux", true},
+	} {
+		calls := 0
+		client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if r.Method != "GET" || r.URL.Path != "/v1/status" {
+				t.Fatal("new agent state used a legacy command")
+			}
+			data, _ := json.Marshal(guestops.Status{Protocol: 1, OS: test.os, Desktop: guestops.DesktopStatus{Mode: test.mode, State: test.state}})
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(data))}, nil
+		})}
+		got, err := displayFromGuest(client, test.kind)
+		if (err != nil) != test.fail || calls != 1 || !test.fail && got.Mode != test.mode || got.Username != "" || len(got.Password) != 0 {
+			t.Fatalf("wrong status selection: mode=%s error=%v", got.Mode, err)
+		}
+	}
+	for _, code := range []int{404, 501} {
+		calls := 0
+		client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader("old agent"))}, nil
+			}
+			if calls != 2 || r.Method != "POST" || r.URL.Path != "/exec" {
+				t.Fatal("invalid legacy fallback")
+			}
+			data, _ := json.Marshal(guestops.Result{Stdout: []byte("wayland\nRDP:\n Status: enabled\n Username: myvm\n Password: old-keyring\n")})
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(data))}, nil
+		})}
+		got, err := displayFromGuest(client, "linux")
+		if err != nil || calls != 2 || got.Mode != "wayland" || string(got.Password) != "old-keyring" {
+			t.Fatal("legacy GNOME credentials were lost", err)
+		}
+		login := got.login()
+		if login == nil {
+			t.Fatal("missing legacy login")
+		}
+		login.clear()
+	}
+}
+
+func TestLinuxSwitchNotReadyKeepsExistingViewer(t *testing.T) {
+	v := &viewer{linux: true, vmid: "not-ready", pipe: `\\.\pipe\my-vm-example.basic`, log: io.Discard}
+	v.switchDisplay(true, true)
+	if v.closed || v.enhanced || v.pipe != `\\.\pipe\my-vm-example.basic` || !strings.Contains(v.status, "保留当前画面") {
+		t.Fatal("failed readiness query destroyed the current viewer")
 	}
 }
 
@@ -88,7 +144,7 @@ func TestDisplayProbeRejectsFailedAndMismatchedDesktop(t *testing.T) {
 			data, _ := json.Marshal(guestops.Result{ExitCode: test.exit, Stdout: []byte(test.mode + "\n"), Truncated: test.truncated})
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(data))}, nil
 		})}
-		_, err := displayFromGuest(client, test.kind)
+		_, err := legacyDisplayFromGuest(client, test.kind)
 		if (err != nil) != test.fail {
 			t.Fatalf("kind=%s mode=%s error=%v", test.kind, test.mode, err)
 		}
@@ -138,7 +194,7 @@ func TestAutomaticDisplayProbeIsBounded(t *testing.T) {
 	if got := probeDisplay("blocked", "linux", io.Discard); got.Mode != "" {
 		t.Fatal("blocked agent selected enhanced")
 	}
-	if time.Since(started) > 6*time.Second {
+	if time.Since(started) > 10*time.Second {
 		t.Fatal("probe was not bounded by child lifetime")
 	}
 	for _, kind := range []string{"windows", "wayland", "x11"} {

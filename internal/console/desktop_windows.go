@@ -29,7 +29,7 @@ func detectLinuxWayland(runtimeID string, log io.Writer) bool {
 		fmt.Fprintln(log, "读取 Linux 桌面会话:", err)
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	// go-winio cannot cancel a pending ConnectEx; bound the probe by its process lifetime.
 	command := exec.CommandContext(ctx, executable, "--console", "--detect-desktop", runtimeID)
@@ -69,6 +69,12 @@ func guestClient(runtimeID string) (*http.Client, error) {
 }
 
 func linuxSessionType(client *http.Client) (string, error) {
+	if status, err := guestops.ReadStatus(context.Background(), client); err == nil {
+		if status.OS == "linux" && (status.Desktop.Mode == "x11" || status.Desktop.Mode == "wayland") {
+			return status.Desktop.Mode, nil
+		}
+		return "", fmt.Errorf("客户机没有报告支持的 Linux 桌面")
+	}
 	data, err := json.Marshal(guestops.Command{Args: []string{"/usr/bin/printenv", "XDG_SESSION_TYPE"}, Timeout: 1})
 	if err != nil {
 		return "", err

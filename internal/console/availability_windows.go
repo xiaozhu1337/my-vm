@@ -45,9 +45,13 @@ func (a *enhancedAvailability) finish(ready bool) bool {
 }
 
 func enhancedState(ctx context.Context, runtimeID, kind string) string {
+	// A valid unknown state must not be overridden by an older readiness query.
 	state := probeAvailability(ctx, runtimeID, kind+"-status")
-	if state != "unknown" || ctx.Err() != nil {
+	if state != "unavailable" {
 		return state
+	}
+	if ctx.Err() != nil {
+		return "unknown"
 	}
 	return probeAvailability(ctx, runtimeID, kind)
 }
@@ -65,9 +69,12 @@ func probeAvailability(parent context.Context, runtimeID, kind string) string {
 	defer clear(output)
 	if err == nil && len(output) <= 16 {
 		state := strings.TrimSpace(string(output))
-		if state == "ready" || state == "waiting" || state == "unknown" || state == "available" || state == "unsupported" {
+		if state == "ready" || state == "waiting" || state == "unknown" || state == "available" || state == "unsupported" || state == "unavailable" {
 			return state
 		}
+	}
+	if strings.HasSuffix(kind, "-status") {
+		return "unavailable"
 	}
 	return "unknown"
 }
@@ -89,7 +96,7 @@ func queryEnhancedAvailability(runtimeID, kind string) string {
 				return protocolAvailability(status, kind)
 			}
 		}
-		return "unknown"
+		return "unavailable"
 	}
 	if kind == "windows" {
 		known, available := hcs.EnhancedSessionState(runtimeID)
@@ -104,7 +111,12 @@ func queryEnhancedAvailability(runtimeID, kind string) string {
 	if kind == "windows-agent" {
 		return "unknown"
 	}
-	capability, err := queryDisplay(runtimeID, kind)
+	client, err := guestClient(runtimeID)
+	if err != nil {
+		return "unknown"
+	}
+	defer client.CloseIdleConnections()
+	capability, err := legacyDisplayFromGuest(client, kind)
 	clear(capability.Password)
 	if err == nil && capability.Mode != "" {
 		return "ready"

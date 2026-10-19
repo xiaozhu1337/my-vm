@@ -87,12 +87,13 @@ func (v *viewer) configureLogin() error {
 	v.loginTarget = loginTarget(v.pipe)
 	login := v.automaticLogin
 	var err error
-	if login == nil && !v.automatic {
-		capability := probeDisplay(v.vmid, "wayland", v.log)
-		login = capability.login()
-	}
 	if login == nil {
 		login, err = chooseLogin(v.loginTarget, readLogin, func() (*loginCredential, error) {
+			// Older GNOME installs may have a keyring entry without a host credential record.
+			capability := probeDisplay(v.vmid, "wayland-login", v.log)
+			if recovered := capability.login(); recovered != nil {
+				return recovered, nil
+			}
 			return promptLogin(v.hwnd, v.loginTarget, v.title)
 		})
 	}
