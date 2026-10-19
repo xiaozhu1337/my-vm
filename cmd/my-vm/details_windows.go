@@ -33,40 +33,30 @@ func (a *application) details(c *ui.Context) {
 	if actual := a.manager.Memory(m.ID); actual > 0 {
 		memory = actual
 	}
-	off := state == "已关机" && !a.diskBusy(m.ID)
 	ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
 			muted(c, "虚拟机库 / 工作空间")
-			components.Text(c, m.Name).FontSize(30).FontWeight(600).SingleLine().FillWidth()
+			components.Text(c, m.Name).FontSize(30).FontWeight(600).SingleLine().FillWidth().
+				ContextMenu(func(menu *ui.Menu) { a.machineMenu(menu, m, state) })
 		})
 		stateBadge(c, state)
 	})
-	ui.Row(c).FillWidth().Gap(14).AlignItems(ui.Center).Children(func() {
-		tabs := components.Tabs(c, &a.detailTab, components.TabsUnderline, "概览", "磁盘快照")
-		if tabs.List.Changed() && a.detailTab == 1 && off {
-			a.refreshSnapshots(m)
-		}
-		ui.Spacer(c)
-		if button(c, "复制虚拟机", off && m.Backend == "hcs") {
-			a.beginClone(m)
-		}
-		if button(c, "编辑配置", off) {
-			a.edit(m, false)
-		}
-	})
+	tabs := components.Tabs(c, &a.detailTab, components.TabsUnderline, "概览", "磁盘快照")
+	if tabs.List.Changed() && a.detailTab == 1 && state == "已关机" && !a.diskBusy(m.ID) {
+		a.refreshSnapshots(m)
+	}
 	scrollBody(c, fmt.Sprintf("machine-%s-%d", m.ID, a.detailTab), func() {
 		if a.detailTab == 1 {
 			a.snapshotView(c, m, state == "已关机")
 			return
 		}
-		a.powerCard(c, m, state)
+		a.statusCard(c, m, state)
 		ui.Row(c).FillWidth().Gap(14).Children(func() {
 			metric(c, "处理器", fmt.Sprintf("%d 核", m.CPUs), "虚拟 CPU")
 			metric(c, "内存", fmt.Sprintf("%g GiB", float64(memory)/1024), fmt.Sprintf("%d MiB 已分配", memory))
 			metric(c, "系统磁盘", fmt.Sprintf("%d GiB", m.DiskGiB), "VHDX / 按需占用")
 		})
-		a.memoryCard(c, m, state)
-		card(c, "设备与连接", "启动前可在编辑配置中调整设备。", func() {
+		card(c, "设备与连接", "在虚拟机右键菜单选择“编辑配置”可调整设备。", func() {
 			infoRow(c, "客户机系统", m.GuestName())
 			infoRow(c, "虚拟化引擎", "Hyper-V HCS")
 			network := "NAT / 共享主机网络"
@@ -81,13 +71,10 @@ func (a *application) details(c *ui.Context) {
 				iso = "未挂载 / 从硬盘启动"
 			}
 			infoRow(c, "安装光盘", iso)
-			if button(c, "安装增强能力", m.Backend == "hcs" && state != "已暂停" && !a.diskBusy(m.ID)) {
-				a.installEnhancements(m)
-			}
 			if m.DriverISO != "" {
 				infoRow(c, "增强光盘", m.DriverISO)
 			}
-			muted(c, "插入离线增强盘后，在客户机桌面运行盘内安装程序；Windows、GNOME 和 KDE 自动配置各自服务。")
+			muted(c, "从右键菜单安装增强能力，插入光盘后在客户机桌面运行安装程序。")
 			infoRow(c, "显示设备", "Hyper-V 基础控制台 / RDP 增强会话")
 			for _, s := range m.Shares {
 				mode := "只读"
@@ -101,89 +88,89 @@ func (a *application) details(c *ui.Context) {
 			}
 			infoRow(c, "磁盘位置", vm.DiskPath(a.root, m))
 		})
-		ui.Column(c).FillWidth().Gap(10).Children(func() {
-			if components.Button(c, "更多操作", components.ButtonGhost).Clicked() {
-				a.showAdvanced = !a.showAdvanced
-			}
-			if a.showAdvanced {
-				card(c, "谨慎操作", "强制断电可能丢失未保存的数据；从列表移除会保留磁盘和快照。", func() {
-					ui.Row(c).Gap(12).Children(func() {
-						ui.Row(c).TextColor(c.Theme().Danger).Children(func() {
-							if button(c, "强制断电", state != "已关机" && !a.diskBusy(m.ID)) && a.confirm("强制断电", "关闭「"+m.Name+"」？", "未保存的数据可能丢失，建议优先使用正常关机。") {
-								a.run(m.ID, "强制断电「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "kill") }, nil)
-							}
-						})
-						if button(c, "基础控制台（安装与维护）", state != "已关机" && !a.diskBusy(m.ID)) {
-							a.run(m.ID, "打开基础控制台「"+m.Name+"」", func() error { return a.manager.ShowDisplayMode(m.ID, false) }, nil)
-						}
-						if button(c, "从列表移除", off) {
-							a.remove(m)
-						}
-					})
-				})
-			}
-		})
 	})
 }
 
-func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
-	off, paused := state == "已关机", state == "已暂停"
+func (a *application) statusCard(c *ui.Context, m vm.Machine, state string) {
 	title, description := "准备就绪", "启动虚拟机后，客户机画面将在独立窗口中打开。"
-	if !off {
+	if state != "已关机" {
 		title, description = "虚拟机正在运行", "打开画面时优先使用已就绪的增强桌面，否则显示基础控制台。"
 	}
-	if paused {
+	if state == "已暂停" {
 		title, description = "虚拟机已暂停", "继续运行后，客户机才能响应操作与正常关机请求。"
 	}
 	if operation := a.operations[m.ID]; operation != "" {
 		title, description = operation+"…", "可继续切换或操作其他虚拟机。"
 	}
-	ui.Column(c).FillWidth().Gap(20).Padding(24).Radius(12).
+	ui.Column(c).FillWidth().Gap(12).Padding(24).Radius(12).
 		Background(c.Theme().Surface.Mix(c.Theme().Accent, .06)).Border(1, c.Theme().Accent.Alpha(.18)).Children(func() {
-		ui.Column(c).FillWidth().Gap(7).Children(func() {
-			components.Text(c, title).FontSize(22).FontWeight(600)
-			muted(c, description)
-		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Disabled(a.diskBusy(m.ID)).Children(func() {
-			label := "启动虚拟机"
-			if paused {
-				label = "继续运行"
-			} else if !off {
-				label = "打开画面"
-			}
-			if action(c, label, m.Backend == "hcs", components.ButtonPrimary) {
-				switch {
-				case off:
-					dir := a.config.QEMUDir
-					a.resetSnapshots()
-					a.run(m.ID, "启动虚拟机「"+m.Name+"」", func() error {
-						if err := a.manager.Start(dir, m); err != nil {
-							return err
-						}
-						return a.manager.ShowDisplay(m.ID)
-					}, nil)
-				case paused:
-					a.run(m.ID, "继续运行「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "cont") }, nil)
-				default:
-					a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
-				}
-			}
-			if !off {
-				if paused {
-					if button(c, "打开画面", true) {
-						a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
-					}
-				} else if button(c, "暂停", true) {
-					a.run(m.ID, "暂停虚拟机「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "stop") }, nil)
-				}
-				if button(c, "正常关机", !paused) {
-					a.run(m.ID, "发送关机请求「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "system_powerdown") }, func() {
-						a.message = "已发送关机请求，等待客户机退出；无响应时可在“更多操作”中强制断电。"
-					})
-				}
-			}
-		})
+		components.Text(c, title).FontSize(22).FontWeight(600)
+		muted(c, description)
+		muted(c, "右键左侧虚拟机可查看全部操作。")
 	})
+}
+
+func (a *application) machineMenu(menu *ui.Menu, m vm.Machine, state string) {
+	blocked := a.busy || a.loadError != nil || a.diskBusy(m.ID)
+	editing := a.page == "edit" && a.draft.ID == m.ID
+	off, paused, hcs := state == "已关机", state == "已暂停", m.Backend == "hcs"
+	menu.Item(m.Name).Disabled(true)
+	menu.Separator()
+	if menu.Item("启动虚拟机").Disabled(blocked || !off || !hcs).Chosen() {
+		dir := a.config.QEMUDir
+		if a.selected == m.ID {
+			a.resetSnapshots()
+		}
+		a.run(m.ID, "启动虚拟机「"+m.Name+"」", func() error {
+			if err := a.manager.Start(dir, m); err != nil {
+				return err
+			}
+			return a.manager.ShowDisplay(m.ID)
+		}, nil)
+	}
+	if menu.Item("打开画面").Disabled(blocked || off || !hcs).Chosen() {
+		a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
+	}
+	pauseLabel, pauseCommand := "暂停", "stop"
+	if paused {
+		pauseLabel, pauseCommand = "继续运行", "cont"
+	}
+	if menu.Item(pauseLabel).Disabled(blocked || off || !hcs).Chosen() {
+		a.run(m.ID, pauseLabel+"「"+m.Name+"」", func() error { return a.manager.Control(m.ID, pauseCommand) }, nil)
+	}
+	if menu.Item("正常关机").Disabled(blocked || off || paused || !hcs).Chosen() {
+		a.run(m.ID, "发送关机请求「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "system_powerdown") }, func() {
+			a.message = "已发送关机请求，等待客户机退出；无响应时可在虚拟机右键菜单中强制断电。"
+		})
+	}
+	menu.Separator()
+	if menu.Item("编辑配置").Disabled(blocked || !off).Chosen() && a.leavePage() {
+		a.edit(m, false)
+	}
+	if menu.Item("复制虚拟机").Disabled(blocked || !off || !hcs).Chosen() {
+		a.beginClone(m)
+	}
+	if menu.Item("安装增强能力").Disabled(blocked || editing || paused || !hcs).Chosen() {
+		a.installEnhancements(m)
+	}
+	if menu.Item("管理快照").Disabled(a.busy || a.loadError != nil || !hcs).Chosen() && a.selectMachine(m, "", 1) {
+		if off && !a.snapshotsLoaded && !a.diskBusy(m.ID) {
+			a.refreshSnapshots(m)
+		}
+	}
+	if menu.Item("调整运行内存").Disabled(blocked || state != "运行中" || !m.DynamicMemory || !hcs).Chosen() && a.selectMachine(m, "memory", 0) {
+		a.runtimeMemoryID = ""
+	}
+	menu.Separator()
+	if menu.Item("基础控制台（安装与维护）").Disabled(blocked || off || !hcs).Chosen() {
+		a.run(m.ID, "打开基础控制台「"+m.Name+"」", func() error { return a.manager.ShowDisplayMode(m.ID, false) }, nil)
+	}
+	if menu.Item("强制断电").Disabled(blocked || off || !hcs).Chosen() && a.confirm("强制断电", "关闭「"+m.Name+"」？", "未保存的数据可能丢失，建议优先使用正常关机。") {
+		a.run(m.ID, "强制断电「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "kill") }, nil)
+	}
+	if menu.Item("从列表移除").Disabled(blocked || editing || !off).Chosen() {
+		a.remove(m)
+	}
 }
 
 func metric(c *ui.Context, label, value, description string) {

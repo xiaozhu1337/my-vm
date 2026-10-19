@@ -8,6 +8,26 @@ import (
 	"my-vm/internal/vm"
 )
 
+func (a *application) memoryPage(c *ui.Context) {
+	m, ok := a.machine()
+	if !ok {
+		a.page = ""
+		return
+	}
+	pageHeading(c, "调整运行内存", m.Name+" / 仅调整本次运行的内存。")
+	scrollBody(c, "memory-"+m.ID, func() {
+		state := a.manager.State(m.ID)
+		if state == "已关机" || !m.DynamicMemory {
+			muted(c, "此虚拟机当前无法调整运行内存；请启用内存按需分配并启动虚拟机。")
+			return
+		}
+		a.memoryCard(c, m, state)
+	})
+	if action(c, "返回", true, components.ButtonGhost) {
+		a.selectMachine(m, "", 0)
+	}
+}
+
 func (a *application) memoryCard(c *ui.Context, m vm.Machine, state string) {
 	if state == "已关机" || !m.DynamicMemory {
 		return

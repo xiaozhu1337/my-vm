@@ -33,7 +33,6 @@ type application struct {
 	editVersion                             int
 	cloneSource                             *vm.Machine
 	listPage, filter, detailTab             int
-	showAdvanced                            bool
 	draft, savedDraft                       vm.Machine
 	creating                                bool
 	cpu, memory, disk                       float64
@@ -58,6 +57,17 @@ func (a *application) machine() (vm.Machine, bool) {
 		}
 	}
 	return vm.Machine{}, false
+}
+
+func (a *application) selectMachine(m vm.Machine, page string, tab int) bool {
+	if !a.leavePage() {
+		return false
+	}
+	if a.selected != m.ID || a.page != page || a.detailTab != tab {
+		a.resetSnapshots()
+	}
+	a.selected, a.page, a.detailTab = m.ID, page, tab
+	return true
 }
 
 func (a *application) edit(m vm.Machine, creating bool) {
@@ -194,7 +204,6 @@ func (a *application) resetSnapshots() {
 	a.snapshotsLoaded = false
 	a.snapshotName = ""
 	a.snapshotPage = 0
-	a.showAdvanced = false
 }
 
 func (a *application) acceptSnapshots(id string, request int, snapshots []vm.Snapshot) bool {

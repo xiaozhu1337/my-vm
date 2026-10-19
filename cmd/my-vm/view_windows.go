@@ -23,6 +23,8 @@ func (a *application) view(c *ui.Context) {
 				switch a.page {
 				case "settings":
 					a.settings(c)
+				case "memory":
+					a.memoryPage(c)
 				case "edit":
 					ui.Column(c).Disabled(a.diskBusy(a.draft.ID)).Fill().Children(func() { a.editor(c) })
 				default:
@@ -55,6 +57,7 @@ func (a *application) sidebar(c *ui.Context) {
 		if components.Tabs(c, &a.filter, components.TabsHighlight, "全部", "已启动").List.Changed() {
 			a.listPage = 0
 		}
+		muted(c, "右键虚拟机查看操作")
 		machines := []vm.Machine{}
 		for _, m := range a.config.Machines {
 			if strings.Contains(strings.ToLower(m.Name), strings.ToLower(a.query)) && (a.filter == 0 || a.manager.State(m.ID) != "已关机") {
@@ -86,10 +89,9 @@ func (a *application) sidebar(c *ui.Context) {
 							})
 						})
 					})
-					if item.Clicked() && a.leavePage() {
-						a.selected, a.page = m.ID, ""
-						a.resetSnapshots()
-						a.detailTab = 0
+					item.ContextMenu(func(menu *ui.Menu) { a.machineMenu(menu, m, a.manager.State(m.ID)) })
+					if item.Clicked() {
+						a.selectMachine(m, "", 0)
 					}
 				})
 			}
