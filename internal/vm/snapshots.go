@@ -2,13 +2,9 @@ package vm
 
 import (
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
-
-	"golang.org/x/sys/windows"
 )
 
 type Snapshot struct {
@@ -17,8 +13,9 @@ type Snapshot struct {
 }
 
 func (m *Manager) Snapshots(_ string, machine Machine) ([]Snapshot, error) {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	lock := m.operation(machine.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	return m.snapshots(machine)
 }
 func (m *Manager) snapshots(machine Machine) ([]Snapshot, error) {
@@ -51,9 +48,10 @@ func (m *Manager) snapshots(machine Machine) ([]Snapshot, error) {
 }
 
 // A full offline copy keeps the format independent of VM registration and firmware.
-func (m *Manager) Snapshot(_ string, machine Machine, action, name string) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+func (m *Manager) Snapshot(_ string, machine Machine, action, name string, progress func(int64, int64)) error {
+	lock := m.operation(machine.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	if !validSnapshot.MatchString(name) {
 		return errors.New("快照名称需为 1 到 64 个英文字母、数字、下划线或连字符，并以英文字母开头")
 	}
@@ -84,7 +82,7 @@ func (m *Manager) Snapshot(_ string, machine Machine, action, name string) error
 		if err = os.Mkdir(folder, 0700); err != nil {
 			return err
 		}
-		if err = copyExclusive(disk, snapshot); err != nil {
+		if err = copyExclusive(disk, snapshot, progress); err != nil {
 			_ = os.Remove(folder)
 			return err
 		}
@@ -95,7 +93,7 @@ func (m *Manager) Snapshot(_ string, machine Machine, action, name string) error
 			return errors.New("快照不存在")
 		}
 		pending := disk + ".restore"
-		if err = copyExclusive(snapshot, pending); err != nil {
+		if err = copyExclusive(snapshot, pending, progress); err != nil {
 			return err
 		}
 		if err = os.Rename(pending, disk); err != nil {
@@ -114,34 +112,4 @@ func (m *Manager) Snapshot(_ string, machine Machine, action, name string) error
 	default:
 		return errors.New("快照操作无效")
 	}
-}
-func copyExclusive(source, target string) error {
-	path, err := windows.UTF16PtrFromString(source)
-	if err != nil {
-		return err
-	}
-	// Deny writers while copying, including disks attached by another manager.
-	handle, err := windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil,
-		windows.OPEN_EXISTING, windows.FILE_FLAG_SEQUENTIAL_SCAN, 0)
-	if err != nil {
-		return err
-	}
-	input := os.NewFile(uintptr(handle), source)
-	defer input.Close()
-	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(output, input)
-	if err == nil {
-		err = output.Sync()
-	}
-	if closeErr := output.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = os.Remove(target)
-		return fmt.Errorf("复制磁盘失败（原磁盘保留）: %w", err)
-	}
-	return nil
 }

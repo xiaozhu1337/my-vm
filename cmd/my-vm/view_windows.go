@@ -21,7 +21,7 @@ func (a *application) view(c *ui.Context) {
 				case "settings":
 					a.settings(c)
 				case "edit":
-					a.editor(c)
+					ui.Column(c).Disabled(a.diskBusy(a.draft.ID)).Fill().Children(func() { a.editor(c) })
 				default:
 					a.details(c)
 				}
@@ -137,7 +137,10 @@ func (a *application) statusBar(c *ui.Context) {
 		} else if !a.busy {
 			color = c.Theme().Success
 		}
-		if a.busy {
+		if a.diskJob != nil && !a.messageError {
+			message, color = a.diskJob.status(), c.Theme().TextMuted
+		}
+		if a.busy || a.diskJob != nil {
 			components.Spinner(c, components.SpinnerRing).Label("正在处理").Size(16, 16)
 		}
 		components.Text(c, strings.SplitN(message, "\n", 2)[0]).SingleLine().Grow(1).MinWidth(0).FontSize(12).TextColor(color)

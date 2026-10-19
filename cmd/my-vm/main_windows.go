@@ -85,7 +85,7 @@ func main() {
 		shell := plain.NewShell(plain.ShellOptions{Title: "My VM · Windows 虚拟机管理器", Width: 1240, Height: 860, MinWidth: 1040, MinHeight: 700, Theme: appTheme, Content: a.view})
 		a.window = shell.Window()
 		a.window.OnClose(func(e *mygo.CloseEvent) {
-			if a.busy || a.manager.Active() {
+			if a.busy || a.diskJob != nil || a.manager.Active() {
 				e.PreventDefault()
 				a.messageError = false
 				a.message = "请等待当前操作完成，并关闭所有虚拟机后再退出。"

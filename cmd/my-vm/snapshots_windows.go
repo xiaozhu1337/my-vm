@@ -20,8 +20,11 @@ func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {
 			muted(c, "快照只保存磁盘状态。恢复会覆盖当前磁盘内容。")
 		})
 	}
+	if a.diskBusy(m.ID) {
+		muted(c, "这台虚拟机正在处理磁盘，请在状态栏查看进度；仍可切换和管理其他虚拟机。")
+	}
 	card(c, "保存当前磁盘状态", "更新系统或安装软件前，留下一份可恢复的磁盘快照。", func() {
-		ui.Row(c).FillWidth().Gap(10).Disabled(!off).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Gap(10).Disabled(!off || a.diskJob != nil).AlignItems(ui.Center).Children(func() {
 			components.TextBox(c, &a.snapshotName, components.TextBoxOptions{}).Label("快照名称").Placeholder("例如 before-update").Grow(1).MinWidth(0)
 			if action(c, "创建快照", strings.TrimSpace(a.snapshotName) != "", components.ButtonPrimary) {
 				a.snapshot(m, "-c", a.snapshotName)
@@ -35,7 +38,7 @@ func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {
 				muted(c, fmt.Sprintf("共 %d 个快照", len(a.snapshots)))
 			}
 			ui.Spacer(c)
-			if button(c, "刷新列表", off) {
+			if button(c, "刷新列表", off && !a.diskBusy(m.ID)) {
 				a.refreshSnapshots(m)
 			}
 		})
@@ -60,10 +63,10 @@ func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {
 					components.Text(c, snapshot.Name).FontWeight(600).SingleLine().FillWidth()
 					muted(c, time.Unix(snapshot.DateSeconds, 0).Format("2006-01-02 15:04"))
 				})
-				if button(c, "恢复", off) {
+				if button(c, "恢复", off && a.diskJob == nil) {
 					a.snapshot(m, "-a", snapshot.Name)
 				}
-				if action(c, "删除", off, components.ButtonGhost) {
+				if action(c, "删除", off && a.diskJob == nil, components.ButtonGhost) {
 					a.snapshot(m, "-d", snapshot.Name)
 				}
 			})

@@ -70,8 +70,8 @@ func (m Machine) Validate() error {
 		return errors.New("内存需要在 256 到 1048576 MiB 之间")
 	case m.DiskGiB < 1 || m.DiskGiB > 65536:
 		return errors.New("磁盘需要在 1 到 65536 GiB 之间")
-	case m.Network != "nat" && m.Network != "bridge":
-		return errors.New("网络模式必须为 nat 或 bridge")
+	case m.Network != "nat" && m.Network != "bridge" && (m.Network != "none" || m.Backend != "hcs"):
+		return errors.New("网络模式必须为 nat、bridge 或 HCS 的 none（断开网络）")
 	case m.GuestOS != "" && m.GuestOS != "windows" && m.GuestOS != "linux":
 		return errors.New("客户机系统必须为 windows 或 linux")
 	case m.Backend != "" && m.Backend != "qemu" && m.Backend != "hcs":
@@ -139,7 +139,7 @@ func Save(path string, cfg Config) error {
 		"machines": "虚拟机清单；HCS 磁盘位于同目录 machines/<id>/disk.vhdx。",
 		"id":       "内部唯一标识；请勿修改。", "name": "显示名称；共享项名称需为字母开头的英文、数字、下划线或连字符。", "cpus": "虚拟 CPU 数量。",
 		"memory_mib": "内存大小，单位 MiB。", "disk_gib": "创建时的磁盘容量，单位 GiB；修改此字段不会调整磁盘。",
-		"iso": "安装光盘 ISO 的绝对路径；留空表示不挂载光盘。", "network": "网络模式：nat 或 bridge。",
+		"iso": "安装光盘 ISO 的绝对路径；留空表示不挂载光盘。", "network": "网络模式：nat、bridge 或 none（断开网络，复制后先处理客户机身份冲突）。",
 		"driver_iso":  "客户机工具或驱动光盘 ISO 的绝对路径；作为第二张只读光盘挂载，可与安装光盘同时使用。",
 		"display":     "旧版本的 std/virtio 显示设备记录；HCS 使用 Hyper-V 显示和本地 RDP。",
 		"tap":         "旧版本的 TAP 网卡记录；HCS 使用 HCN 交换机。",

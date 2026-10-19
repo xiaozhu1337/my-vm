@@ -25,6 +25,7 @@ func (a *application) shareEditor(c *ui.Context) {
 						a.busy = true
 						paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.window, Title: "选择共享文件夹", Directory: true})
 						a.busy = false
+						a.flushDisk()
 						if err != nil {
 							a.report(err)
 						} else if len(paths) > 0 {

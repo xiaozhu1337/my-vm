@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
@@ -28,6 +29,9 @@ type viewer struct {
 	enhanced, clipboard, linux, closed bool
 	pipe, vmid, title, status          string
 	log                                io.Writer
+	layout                             displaySettings
+	display                            displayUpdate
+	displayError                       string
 }
 
 var current *viewer
@@ -271,24 +275,39 @@ func (v *viewer) resize() {
 	if width < 200 || height < 200 {
 		return
 	}
-	user32.NewProc("MoveWindow").Call(v.header, 12, 12, uintptr(width-24), uintptr(top-12), 1)
-	user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
+	settings := displaySettings{width: width, height: height, dpi: dpi}
+	if v.layout != settings {
+		user32.NewProc("MoveWindow").Call(v.header, 12, 12, uintptr(width-24), uintptr(top-12), 1)
+		user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
+		v.layout = settings
+	}
 	if v.client == nil {
 		return
 	}
 	result, err := oleutil.GetProperty(v.client, "Connected")
-	if err == nil && result.Val == 1 {
-		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
-		if v.enhanced {
-			scale := dpi * 100 / 96
-			if scale > 500 {
-				scale = 500
-			}
-			_ = call(&v.client.IUnknown, 69, uintptr(width), uintptr(height), uintptr(width)*254/(dpi*10), uintptr(height)*254/(dpi*10), 0, scale, 100)
-		}
-	}
+	connected := err == nil && result.Val == 1
 	if result != nil {
 		_ = result.Clear()
+	}
+	if connected && !v.display.connected {
+		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
+	}
+	if !v.enhanced {
+		v.display.connected = connected
+		return
+	}
+	sent, err := v.display.update(connected, settings, time.Now(), func(s displaySettings) error {
+		scale := min(s.dpi*100/96, 500)
+		return call(&v.client.IUnknown, 69, uintptr(s.width), uintptr(s.height), uintptr(s.width)*254/(s.dpi*10), uintptr(s.height)*254/(s.dpi*10), 0, scale, 100)
+	})
+	if err != nil {
+		if err.Error() != v.displayError {
+			v.fail(fmt.Errorf("调整增强会话分辨率失败: %w", err))
+			v.displayError = err.Error()
+		}
+	} else if sent {
+		v.displayError = ""
+		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
 	}
 }
 func (v *viewer) close() {
@@ -296,6 +315,7 @@ func (v *viewer) close() {
 		return
 	}
 	v.closed = true
+	user32.NewProc("KillTimer").Call(v.hwnd, 1)
 	if v.client != nil {
 		_, _ = oleutil.CallMethod(v.client, "Disconnect")
 	}

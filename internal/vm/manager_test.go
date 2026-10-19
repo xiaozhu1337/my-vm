@@ -28,10 +28,10 @@ func TestVHDXSnapshots(t *testing.T) {
 	if err = manager.CreateDisk("", machine); err == nil {
 		t.Fatal("existing disk overwritten")
 	}
-	if err = manager.Snapshot("", machine, "-c", "baseline"); err != nil {
+	if err = manager.Snapshot("", machine, "-c", "baseline", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.Snapshot("", machine, "-c", "baseline"); err == nil {
+	if err = manager.Snapshot("", machine, "-c", "baseline", nil); err == nil {
 		t.Fatal("duplicate snapshot accepted")
 	}
 	list, err := manager.Snapshots("", machine)
@@ -39,27 +39,27 @@ func TestVHDXSnapshots(t *testing.T) {
 		t.Fatal(list, err)
 	}
 	for _, name := range []string{"1", "../outside", "-unsafe"} {
-		if err = manager.Snapshot("", machine, "-c", name); err == nil {
+		if err = manager.Snapshot("", machine, "-c", name, nil); err == nil {
 			t.Fatal("unsafe name accepted")
 		}
 	}
 	if err = os.WriteFile(disk, []byte("changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.Snapshot("", machine, "-a", "baseline"); err != nil {
+	if err = manager.Snapshot("", machine, "-a", "baseline", nil); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(disk)
 	if err != nil || string(before) != string(after) {
 		t.Fatal("restore changed original disk contents", err)
 	}
-	if err = manager.Snapshot("", machine, "-d", "baseline"); err != nil {
+	if err = manager.Snapshot("", machine, "-d", "baseline", nil); err != nil {
 		t.Fatal(err)
 	}
 	if list, err = manager.Snapshots("", machine); err != nil || len(list) != 0 {
 		t.Fatal(list, err)
 	}
-	if err = manager.Snapshot("", machine, "-a", "missing"); err == nil {
+	if err = manager.Snapshot("", machine, "-a", "missing", nil); err == nil {
 		t.Fatal("missing snapshot accepted")
 	}
 }
@@ -79,7 +79,7 @@ func TestSnapshotRejectsExternalWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer windows.CloseHandle(handle)
-	if err := copyExclusive(source, target); err == nil {
+	if err := copyExclusive(source, target, nil); err == nil {
 		t.Fatal("disk with an external writer was copied")
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
@@ -126,7 +126,7 @@ func TestHCSLifecycle(t *testing.T) {
 	if _, err := manager.Snapshots("", machine); err == nil {
 		t.Fatal("running snapshot access accepted")
 	}
-	if err := manager.Snapshot("", machine, "-c", "busy"); err == nil {
+	if err := manager.Snapshot("", machine, "-c", "busy", nil); err == nil {
 		t.Fatal("running snapshot accepted")
 	}
 	if err := manager.Control(machine.ID, "kill"); err != nil {

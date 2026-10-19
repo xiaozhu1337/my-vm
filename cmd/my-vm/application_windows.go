@@ -27,6 +27,9 @@ type application struct {
 	loadError                               error
 	selected, page, query, message, qemuDir string
 	busy, messageError                      bool
+	diskJob                                 *diskJob
+	diskDone                                func()
+	cloneSource                             *vm.Machine
 	listPage, filter, detailTab             int
 	showAdvanced                            bool
 	draft, savedDraft                       vm.Machine
@@ -36,6 +39,7 @@ type application struct {
 	snapshotsLoaded                         bool
 	snapshotName                            string
 	snapshotPage                            int
+	snapshotRequest                         int
 }
 
 func (a *application) report(err error) {
@@ -62,6 +66,7 @@ func (a *application) run(label string, work func() error, done func()) {
 					done()
 				}
 			}
+			a.flushDisk()
 			a.window.Invalidate()
 		})
 	}()
@@ -77,6 +82,7 @@ func (a *application) machine() (vm.Machine, bool) {
 }
 
 func (a *application) edit(m vm.Machine, creating bool) {
+	a.cloneSource = nil
 	if m.GuestOS == "" {
 		m.GuestOS = "windows"
 	}
@@ -106,6 +112,14 @@ func (a *application) saveDraft() {
 	}
 	if a.manager.State(m.ID) != "已关机" {
 		a.message = "请先关闭虚拟机再修改配置。"
+		return
+	}
+	if a.diskBusy(m.ID) {
+		a.message = "请等待这台虚拟机的磁盘操作完成。"
+		return
+	}
+	if a.cloneSource != nil {
+		a.saveClone(*a.cloneSource, m)
 		return
 	}
 	cfg := a.config
@@ -155,6 +169,7 @@ func (a *application) confirm(action, message, detail string) bool {
 	a.busy = true
 	result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.window, Type: mygo.MessageWarning, Title: action, Message: message, Detail: detail, Buttons: []string{"取消", action}, DefaultButton: 0, CancelButton: 0})
 	a.busy = false
+	a.flushDisk()
 	if err != nil {
 		a.report(err)
 		return false
@@ -163,6 +178,9 @@ func (a *application) confirm(action, message, detail string) bool {
 }
 
 func (a *application) remove(m vm.Machine) {
+	if a.diskBusy(m.ID) {
+		return
+	}
 	if a.manager.State(m.ID) != "已关机" {
 		a.message = "请先关闭虚拟机。"
 		return
@@ -184,6 +202,7 @@ func (a *application) remove(m vm.Machine) {
 }
 
 func (a *application) resetSnapshots() {
+	a.snapshotRequest++
 	a.snapshots = nil
 	a.snapshotsLoaded = false
 	a.snapshotName = ""
@@ -191,31 +210,46 @@ func (a *application) resetSnapshots() {
 	a.showAdvanced = false
 }
 
+func (a *application) acceptSnapshots(id string, request int, snapshots []vm.Snapshot) bool {
+	if a.selected != id || a.snapshotRequest != request {
+		return false
+	}
+	a.snapshots, a.snapshotsLoaded, a.snapshotPage = snapshots, true, 0
+	return true
+}
+
 func (a *application) refreshSnapshots(m vm.Machine) {
+	if a.diskBusy(m.ID) {
+		return
+	}
+	request := a.snapshotRequest
 	var snapshots []vm.Snapshot
 	dir := a.config.QEMUDir
 	a.run("读取快照", func() error { var err error; snapshots, err = a.manager.Snapshots(dir, m); return err }, func() {
-		a.snapshots, a.snapshotsLoaded, a.snapshotPage = snapshots, true, 0
+		a.acceptSnapshots(m.ID, request, snapshots)
 	})
 }
 
 func (a *application) snapshot(m vm.Machine, action, name string) {
+	if a.diskJob != nil {
+		return
+	}
 	label := map[string]string{"-c": "创建快照", "-a": "恢复快照", "-d": "删除快照"}[action]
 	if action != "-c" && !a.confirm(label, label+"「"+name+"」？", "虚拟机："+m.Name+"\n"+map[string]string{"-a": "恢复会覆盖当前磁盘内容，请先为当前状态创建快照。", "-d": "删除后无法再恢复到此快照。"}[action]) {
 		return
 	}
+	request := a.snapshotRequest
 	dir := a.config.QEMUDir
 	var snapshots []vm.Snapshot
-	a.run(label, func() error {
-		if err := a.manager.Snapshot(dir, m, action, name); err != nil {
+	a.runDisk(label, m, "", func(progress func(int64, int64)) error {
+		if err := a.manager.Snapshot(dir, m, action, name, progress); err != nil {
 			return err
 		}
 		var err error
 		snapshots, err = a.manager.Snapshots(dir, m)
 		return err
 	}, func() {
-		a.snapshots, a.snapshotsLoaded, a.snapshotPage = snapshots, true, 0
-		if action == "-c" {
+		if a.acceptSnapshots(m.ID, request, snapshots) && action == "-c" {
 			a.snapshotName = ""
 		}
 	})
@@ -225,6 +259,7 @@ func (a *application) pickISO(title string, target *string) {
 	a.busy = true
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.window, Title: title, Filters: []mygo.FileFilter{{Name: "ISO 镜像", Extensions: []string{"iso"}}}})
 	a.busy = false
+	a.flushDisk()
 	if err != nil {
 		a.report(err)
 	} else if len(paths) > 0 {

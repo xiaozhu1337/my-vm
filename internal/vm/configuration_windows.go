@@ -37,8 +37,13 @@ func Configuration(root string, m Machine, endpoint string) (map[string]any, err
 		"VideoMonitor":      map[string]any{"HorizontalResolution": 1280, "VerticalResolution": 720, "ConnectionOptions": connection(".basic")},
 		"EnhancedModeVideo": map[string]any{"ConnectionOptions": connection(".enhanced")},
 		"Keyboard":          map[string]any{}, "Mouse": map[string]any{},
-		"Scsi":            map[string]any{"my-vm-scsi": map[string]any{"Attachments": attachments}},
-		"NetworkAdapters": map[string]any{endpoint: map[string]any{"EndpointId": endpoint}},
+		"Scsi": map[string]any{"my-vm-scsi": map[string]any{"Attachments": attachments}},
+	}
+	if m.Network != "none" {
+		if endpoint == "" {
+			return nil, fmt.Errorf("网络端点不能为空")
+		}
+		devices["NetworkAdapters"] = map[string]any{endpoint: map[string]any{"EndpointId": endpoint}}
 	}
 	if len(m.Shares) > 0 {
 		devices["HvSocket"] = map[string]any{"HvSocketConfig": map[string]any{"ServiceTable": map[string]any{sharing.ServiceGUID(): map[string]any{"AllowWildcardBinds": false, "BindSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)", "ConnectSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}}}}

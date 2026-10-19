@@ -33,7 +33,7 @@ func (a *application) details(c *ui.Context) {
 	if actual := a.manager.Memory(m.ID); actual > 0 {
 		memory = actual
 	}
-	off := state == "已关机"
+	off := state == "已关机" && !a.diskBusy(m.ID)
 	ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
 			muted(c, "虚拟机库 / 工作空间")
@@ -47,13 +47,16 @@ func (a *application) details(c *ui.Context) {
 			a.refreshSnapshots(m)
 		}
 		ui.Spacer(c)
+		if button(c, "复制虚拟机", off && a.diskJob == nil && m.Backend == "hcs") {
+			a.beginClone(m)
+		}
 		if button(c, "编辑配置", off) {
 			a.edit(m, false)
 		}
 	})
 	scrollBody(c, fmt.Sprintf("machine-%s-%d", m.ID, a.detailTab), func() {
 		if a.detailTab == 1 {
-			a.snapshotView(c, m, off)
+			a.snapshotView(c, m, state == "已关机")
 			return
 		}
 		a.powerCard(c, m, state)
@@ -66,7 +69,9 @@ func (a *application) details(c *ui.Context) {
 		card(c, "设备与连接", "启动前可在编辑配置中调整设备。", func() {
 			infoRow(c, "虚拟化引擎", "Hyper-V HCS")
 			network := "NAT / 共享主机网络"
-			if m.Network == "bridge" {
+			if m.Network == "none" {
+				network = "已断开 / 不创建网络适配器"
+			} else if m.Network == "bridge" {
 				network = "桥接 / " + m.SwitchID
 			}
 			infoRow(c, "网络", network)
@@ -96,7 +101,7 @@ func (a *application) details(c *ui.Context) {
 				card(c, "谨慎操作", "强制断电可能丢失未保存的数据；从列表移除会保留磁盘和快照。", func() {
 					ui.Row(c).Gap(12).Children(func() {
 						ui.Row(c).TextColor(c.Theme().Danger).Children(func() {
-							if button(c, "强制断电", !off) && a.confirm("强制断电", "关闭「"+m.Name+"」？", "未保存的数据可能丢失，建议优先使用正常关机。") {
+							if button(c, "强制断电", state != "已关机" && !a.diskBusy(m.ID)) && a.confirm("强制断电", "关闭「"+m.Name+"」？", "未保存的数据可能丢失，建议优先使用正常关机。") {
 								a.run("强制断电", func() error { return a.manager.Control(m.ID, "kill") }, nil)
 							}
 						})
@@ -125,7 +130,7 @@ func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
 			components.Text(c, title).FontSize(22).FontWeight(600)
 			muted(c, description)
 		})
-		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Disabled(a.diskBusy(m.ID)).Children(func() {
 			label := "启动虚拟机"
 			if paused {
 				label = "继续运行"

@@ -32,6 +32,9 @@ func (a *application) editor(c *ui.Context) {
 	if a.creating {
 		title, description, saveLabel = "新建虚拟机", "为你的新环境设置名称、资源和安装镜像。", "创建虚拟机"
 	}
+	if a.cloneSource != nil {
+		title, description, saveLabel = "复制虚拟机", "从「"+a.cloneSource.Name+"」复制已安装的系统，无需重新安装。", "创建独立副本"
+	}
 	pageHeading(c, title, description)
 	scrollBody(c, "editor-"+a.draft.ID, func() {
 		card(c, "基本信息", "使用容易辨认的名称来管理不同的工作环境。", func() {
@@ -48,7 +51,7 @@ func (a *application) editor(c *ui.Context) {
 					text(c, "内存 / MiB")
 					components.NumberInput(c, &a.memory, 256, 1048576, 256).Label("内存 MiB").FillWidth()
 				})
-				ui.Column(c).Key("disk").Grow(1).Basis(0).MinWidth(0).Gap(8).Disabled(!a.creating).Children(func() {
+				ui.Column(c).Key("disk").Grow(1).Basis(0).MinWidth(0).Gap(8).Disabled(!a.creating || a.cloneSource != nil).Children(func() {
 					text(c, "磁盘 / GiB")
 					components.NumberInput(c, &a.disk, 1, 65536, 1).Label("磁盘 GiB").FillWidth()
 				})
@@ -94,9 +97,12 @@ func (a *application) editor(c *ui.Context) {
 			}
 			muted(c, "增强会话允许文本、图片与文件复制粘贴；实际可用格式受客户机策略和应用支持限制。")
 		})
+		if a.cloneSource != nil {
+			muted(c, "副本保留客户机的账户、主机名和系统身份。首次启动建议保持断网，准备好客户机身份后再联网。")
+		}
 		a.shareEditor(c)
 		card(c, "网络连接", "NAT 使用 Hyper-V 默认交换机；桥接使用预先创建的外部交换机。", func() {
-			choice(c, "网络方式", &a.draft.Network, []string{"nat", "bridge"}, map[string]string{"nat": "NAT / Hyper-V 默认交换机", "bridge": "桥接 / Hyper-V 外部交换机"})
+			choice(c, "网络方式", &a.draft.Network, []string{"none", "nat", "bridge"}, map[string]string{"none": "断开网络 / 隔离副本", "nat": "NAT / Hyper-V 默认交换机", "bridge": "桥接 / Hyper-V 外部交换机"})
 			field(c, "Hyper-V 交换机 ID（NAT 可留空）", &a.draft.SwitchID)
 			muted(c, "可在左下角 Hyper-V 设置中查看交换机名称和 ID。桥接需要已连接物理网卡的外部交换机。")
 		})

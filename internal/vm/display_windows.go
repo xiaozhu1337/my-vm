@@ -46,8 +46,9 @@ func guestWindow(pid int) uintptr {
 }
 func (m *Manager) ShowDisplay(id string) error { return m.ShowDisplayMode(id, false) }
 func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	lock := m.operation(id)
+	lock.Lock()
+	defer lock.Unlock()
 	m.mu.Lock()
 	s := m.sessions[id]
 	m.mu.Unlock()
@@ -100,13 +101,13 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 	m.mu.Unlock()
 	go func() {
 		err := command.Wait()
-		m.opMu.Lock()
+		lock.Lock()
 		m.mu.Lock()
 		if s.console == command {
 			s.console = nil
 		}
 		m.mu.Unlock()
-		m.opMu.Unlock()
+		lock.Unlock()
 		if err != nil && m.Log != nil {
 			fmt.Fprintln(m.Log, "控制台退出:", err)
 		}

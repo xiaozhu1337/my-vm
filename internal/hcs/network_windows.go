@@ -83,6 +83,9 @@ func CreateEndpoint(switchID, owner string) (*Endpoint, error) {
 	return &Endpoint{ID: id}, nil
 }
 func (e *Endpoint) Close() error {
+	if e == nil {
+		return nil
+	}
 	var detail *uint16
 	hr, _, _ := network.NewProc("HcnDeleteEndpoint").Call(uintptr(unsafe.Pointer(&e.ID)), uintptr(unsafe.Pointer(&detail)))
 	return check("HcnDeleteEndpoint", hr, resultText(detail))

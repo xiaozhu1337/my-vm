@@ -17,8 +17,9 @@ func (m *Manager) SetMemory(id string, size int) error {
 	if size < 256 || size > 1048576 {
 		return errors.New("内存需要在 256 到 1048576 MiB 之间")
 	}
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	lock := m.operation(id)
+	lock.Lock()
+	defer lock.Unlock()
 	m.mu.Lock()
 	s := m.sessions[id]
 	m.mu.Unlock()

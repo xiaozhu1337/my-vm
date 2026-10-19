@@ -26,16 +26,22 @@ type session struct {
 }
 
 type Manager struct {
-	Root     string
-	Log      io.Writer
-	Changed  func(error)
-	mu, opMu sync.Mutex
-	sessions map[string]*session
+	Root       string
+	Log        io.Writer
+	Changed    func(error)
+	mu         sync.Mutex
+	operations sync.Map
+	sessions   map[string]*session
 }
 
 func NewManager(root string, log io.Writer) *Manager {
 	return &Manager{Root: root, Log: log, sessions: map[string]*session{}}
 }
+func (m *Manager) operation(id string) *sync.Mutex {
+	lock, _ := m.operations.LoadOrStore(id, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 func (m *Manager) State(id string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -58,8 +64,9 @@ func requireHCS(machine Machine) error {
 	return nil
 }
 func (m *Manager) Start(_ string, machine Machine) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	lock := m.operation(machine.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	if err := requireHCS(machine); err != nil {
 		return err
 	}
@@ -104,27 +111,34 @@ func (m *Manager) Start(_ string, machine Machine) error {
 			return err
 		}
 	}
-	networks, err := hcs.Networks()
-	if err != nil {
-		return err
-	}
-	selected := machine.SwitchID
-	if selected == "" {
-		for _, n := range networks {
-			if n.Type == "ICS" {
-				selected = n.ID
-				break
+	var endpoint *hcs.Endpoint
+	if machine.Network != "none" {
+		networks, err := hcs.Networks()
+		if err != nil {
+			return err
+		}
+		selected := machine.SwitchID
+		if selected == "" {
+			for _, n := range networks {
+				if n.Type == "ICS" {
+					selected = n.ID
+					break
+				}
 			}
 		}
+		if selected == "" {
+			return errors.New("未找到 Hyper-V 默认 NAT 交换机；请在设置中查看交换机或指定现有外部交换机")
+		}
+		endpoint, err = hcs.CreateEndpoint(selected, id)
+		if err != nil {
+			return err
+		}
 	}
-	if selected == "" {
-		return errors.New("未找到 Hyper-V 默认 NAT 交换机；请在设置中查看交换机或指定现有外部交换机")
+	endpointID := ""
+	if endpoint != nil {
+		endpointID = endpoint.String()
 	}
-	endpoint, err := hcs.CreateEndpoint(selected, id)
-	if err != nil {
-		return err
-	}
-	configuration, err := Configuration(m.Root, machine, endpoint.String())
+	configuration, err := Configuration(m.Root, machine, endpointID)
 	if err != nil {
 		_ = endpoint.Close()
 		return err
@@ -176,11 +190,12 @@ func (m *Manager) Start(_ string, machine Machine) error {
 }
 func (m *Manager) watch(id string, s *session) {
 	<-s.system.Done()
-	m.opMu.Lock()
+	lock := m.operation(id)
+	lock.Lock()
 	m.mu.Lock()
 	if m.sessions[id] != s {
 		m.mu.Unlock()
-		m.opMu.Unlock()
+		lock.Unlock()
 		return
 	}
 	delete(m.sessions, id)
@@ -196,14 +211,15 @@ func (m *Manager) watch(id string, s *session) {
 	if cleanup := s.endpoint.Close(); cleanup != nil && m.Log != nil {
 		fmt.Fprintln(m.Log, cleanup)
 	}
-	m.opMu.Unlock()
+	lock.Unlock()
 	if m.Changed != nil {
 		m.Changed(nil)
 	}
 }
 func (m *Manager) Control(id, command string) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	lock := m.operation(id)
+	lock.Lock()
+	defer lock.Unlock()
 	m.mu.Lock()
 	s := m.sessions[id]
 	m.mu.Unlock()
@@ -228,8 +244,9 @@ func (m *Manager) Control(id, command string) error {
 	return nil
 }
 func (m *Manager) CreateDisk(_ string, machine Machine) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	lock := m.operation(machine.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	if err := requireHCS(machine); err != nil {
 		return err
 	}
