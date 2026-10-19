@@ -4,8 +4,14 @@ package console
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"runtime"
 	"testing"
 	"time"
+	"unsafe"
+
+	ole "github.com/go-ole/go-ole"
 )
 
 func TestDisplayUpdatesOnlyAfterStableSizeAndConnection(t *testing.T) {
@@ -37,6 +43,184 @@ func TestDisplayUpdatesOnlyAfterStableSizeAndConnection(t *testing.T) {
 	if calls != 3 {
 		t.Fatal("unchanged dimensions were not sent on a new connection")
 	}
+}
+
+func TestDisplayWaitsForAvailableChannelAndKeepsLatestSize(t *testing.T) {
+	var state displayUpdate
+	now := time.Now()
+	settings := displaySettings{1280, 720, 96}
+	calls, ready := 0, false
+	send := func(got displaySettings) error {
+		calls++
+		if got != settings {
+			t.Fatal("stale display dimensions sent", got)
+		}
+		if !ready {
+			return fmt.Errorf("display update: %w", ole.NewError(0x8000FFFF))
+		}
+		return nil
+	}
+	state.update(true, settings, now, send)
+	sent, err := state.update(true, settings, now.Add(300*time.Millisecond), send)
+	if sent || err != nil || !state.waiting || state.applied == settings {
+		t.Fatal("unavailable channel was reported as failed or applied", err)
+	}
+	state.update(true, settings, now.Add(time.Second), send)
+	if calls != 1 || !state.waiting {
+		t.Fatal("pending display update ignored backoff")
+	}
+	settings.width = 1600
+	state.update(true, settings, now.Add(1500*time.Millisecond), send)
+	state.update(true, settings, now.Add(1800*time.Millisecond), send)
+	if calls != 2 || state.applied == settings {
+		t.Fatal("new pending dimensions were lost")
+	}
+	ready = true
+	sent, err = state.update(true, settings, now.Add(4*time.Second), send)
+	if !sent || err != nil || state.waiting || state.applied != settings {
+		t.Fatal("pending channel did not recover with latest dimensions", err)
+	}
+	state.update(true, settings, now.Add(5*time.Second), send)
+	if calls != 3 {
+		t.Fatal("stable applied display was sent again")
+	}
+	state.update(false, settings, now.Add(6*time.Second), send)
+	if state.waiting || state.connected || state.applied != (displaySettings{}) {
+		t.Fatal("disconnect did not clear display state")
+	}
+}
+
+func TestDisplayReturningToAppliedSizeClearsPendingUpdate(t *testing.T) {
+	var state displayUpdate
+	now := time.Now()
+	settings := displaySettings{1280, 720, 96}
+	calls := 0
+	send := func(displaySettings) error {
+		calls++
+		if calls > 1 {
+			return ole.NewError(0x8000FFFF)
+		}
+		return nil
+	}
+	state.update(true, settings, now, send)
+	state.update(true, settings, now.Add(300*time.Millisecond), send)
+	larger := settings
+	larger.width = 1600
+	state.update(true, larger, now.Add(time.Second), send)
+	state.update(true, larger, now.Add(1300*time.Millisecond), send)
+	if !state.waiting {
+		t.Fatal("unavailable update was not retained")
+	}
+	state.update(true, settings, now.Add(2*time.Second), send)
+	state.update(true, settings, now.Add(4*time.Second), send)
+	if state.waiting || state.applied != settings || calls != 2 {
+		t.Fatal("returning to the applied size kept a stale pending update")
+	}
+}
+
+func TestDisplayDoesNotHideOtherCOMFailures(t *testing.T) {
+	var state displayUpdate
+	now := time.Now()
+	settings := displaySettings{1280, 720, 96}
+	failure := ole.NewError(0x80070057)
+	send := func(displaySettings) error { return failure }
+	state.update(true, settings, now, send)
+	_, err := state.update(true, settings, now.Add(time.Second), send)
+	if err != failure || state.waiting {
+		t.Fatal("unexpected COM failure was hidden", err)
+	}
+}
+
+func TestDisplayPersistentInitializationFailureIsReportedAndStillRetries(t *testing.T) {
+	var state displayUpdate
+	now := time.Now()
+	settings := displaySettings{1280, 720, 96}
+	failure := ole.NewError(0x8000FFFF)
+	ready := false
+	send := func(displaySettings) error {
+		if ready {
+			return nil
+		}
+		return failure
+	}
+	for i := range 4 {
+		settings.width++
+		tick := now.Add(time.Duration(i) * 10 * time.Second)
+		state.update(true, settings, tick, send)
+		_, err := state.update(true, settings, tick.Add(300*time.Millisecond), send)
+		if i < 3 && (err != nil || !state.waiting) {
+			t.Fatal("initial channel delay was reported as failure", err)
+		}
+		if i == 3 && (err != failure || state.waiting) {
+			t.Fatal("persistent failure was hidden by dimension changes", err)
+		}
+	}
+	ready = true
+	sent, err := state.update(true, settings, now.Add(33*time.Second), send)
+	if !sent || err != nil || state.waiting || !state.unavailable.IsZero() || state.applied != settings {
+		t.Fatal("reported pending update stopped retrying or did not recover", err)
+	}
+}
+
+func TestNativeDisplayUpdateBeforeConnect(t *testing.T) {
+	if os.Getenv("MY_VM_INTEGRATION") != "1" {
+		t.Skip("set MY_VM_INTEGRATION=1 to test the native RDP control without connecting a guest")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		t.Fatal(err)
+	}
+	defer ole.CoUninitialize()
+	object, err := ole.CreateInstance(ole.NewGUID("{A0C63C30-F08D-4AB4-907C-34905D770C7D}"), ole.IID_IUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer object.Release()
+	client, err := object.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Release()
+	v := &viewer{client: client}
+	if err := v.initializeEvents(); err != nil {
+		t.Fatal(err)
+	}
+	defer v.closeEvents()
+	invoke := func(id uintptr, args *eventArguments) {
+		if err := call((*ole.IUnknown)(unsafe.Pointer(v.events)), 6, id, 0, 0, 1, uintptr(unsafe.Pointer(args)), 0, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invoke(2, nil)
+	if v.loggedIn {
+		t.Fatal("OnConnected was mistaken for login completion")
+	}
+	invoke(3, nil)
+	if !v.loggedIn {
+		t.Fatal("native event sink did not accept OnLoginComplete")
+	}
+	invoke(4, nil)
+	if v.loggedIn {
+		t.Fatal("disconnect retained login state")
+	}
+	allow := int16(0)
+	value := ole.VARIANT{VT: ole.VT_BYREF | ole.VT_BOOL, Val: int64(uintptr(unsafe.Pointer(&allow)))}
+	invoke(15, &eventArguments{values: &value, count: 1})
+	if allow != -1 {
+		t.Fatal("event sink did not allow session close")
+	}
+	var display *ole.IUnknown
+	if err := client.PutQueryInterface(ole.NewGUID("{28904001-04B6-436C-A55B-0AF1A0883DC9}"), &display); err != nil {
+		t.Fatal(err)
+	}
+	defer display.Release()
+	err = call(display, 69, 1280, 720, 338, 190, 0, 100, 100)
+	var native *ole.OleError
+	if !errors.As(err, &native) || uint32(native.Code()) != 0x8000FFFF {
+		t.Fatalf("native display HRESULT was not retained: %v", err)
+	}
+	t.Logf("native display update before Connect: %v", err)
 }
 
 func TestDisplayResizeDebounceAndFailedUpdateRetry(t *testing.T) {

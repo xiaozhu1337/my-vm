@@ -19,7 +19,7 @@ func call(object *ole.IUnknown, slot int, args ...uintptr) error {
 	params := append([]uintptr{uintptr(unsafe.Pointer(object))}, args...)
 	hr, _, _ := syscall.SyscallN(table[slot], params...)
 	if int32(hr) < 0 {
-		return fmt.Errorf("COM slot %d: HRESULT 0x%08X", slot, uint32(hr))
+		return fmt.Errorf("COM slot %d: HRESULT 0x%08X: %w", slot, uint32(hr), ole.NewError(uintptr(uint32(hr))))
 	}
 	return nil
 }

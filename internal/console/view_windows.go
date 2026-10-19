@@ -25,7 +25,12 @@ type viewer struct {
 	hwnd, header, child                         uintptr
 	client, advanced                            *ole.IDispatch
 	context, connector, nonScriptable           *ole.IUnknown
+	displayClient                               *ole.IUnknown
 	callback                                    *connectorCallback
+	events                                      *sessionEvents
+	eventPoint                                  *ole.IConnectionPoint
+	eventCookie                                 uint32
+	loggedIn                                    bool
 	enhanced, clipboard, linux, wayland, closed bool
 	rdpPort                                     int
 	pipe, vmid, title, status                   string
@@ -220,6 +225,16 @@ func (v *viewer) initialize() error {
 	if err != nil {
 		return err
 	}
+	if v.enhanced {
+		if err = v.client.PutQueryInterface(ole.NewGUID("{28904001-04B6-436C-A55B-0AF1A0883DC9}"), &v.displayClient); err != nil {
+			return err
+		}
+		if !v.linux {
+			if err = v.initializeEvents(); err != nil {
+				return err
+			}
+		}
+	}
 	v.advanced, err = property(v.client, "AdvancedSettings9")
 	if err != nil {
 		return err
@@ -325,16 +340,24 @@ func (v *viewer) resize() {
 		v.display.connected = connected
 		return
 	}
+	if connected && !v.linux && !v.loggedIn {
+		v.display.connected = true
+		v.setStatus("已连接 · 登录客户机后自动调整分辨率")
+		return
+	}
 	sent, err := v.display.update(connected, settings, time.Now(), func(s displaySettings) error {
 		scale := min(s.dpi*100/96, 500)
-		return call(&v.client.IUnknown, 69, uintptr(s.width), uintptr(s.height), uintptr(s.width)*254/(s.dpi*10), uintptr(s.height)*254/(s.dpi*10), 0, scale, 100)
+		return call(v.displayClient, 69, uintptr(s.width), uintptr(s.height), uintptr(s.width)*254/(s.dpi*10), uintptr(s.height)*254/(s.dpi*10), 0, scale, 100)
 	})
 	if err != nil {
 		if err.Error() != v.displayError {
 			v.fail(fmt.Errorf("调整增强会话分辨率失败: %w", err))
 			v.displayError = err.Error()
 		}
-	} else if sent {
+	} else if v.display.waiting {
+		v.displayError = ""
+		v.setStatus("已连接 · 客户机显示尚未就绪，稍后自动调整分辨率")
+	} else if sent || v.display.applied == settings {
 		v.displayError = ""
 		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
 	}
@@ -345,6 +368,7 @@ func (v *viewer) close() {
 	}
 	v.closed = true
 	user32.NewProc("KillTimer").Call(v.hwnd, 1)
+	v.closeEvents()
 	if v.client != nil {
 		_, _ = oleutil.CallMethod(v.client, "Disconnect")
 	}
@@ -360,6 +384,10 @@ func (v *viewer) close() {
 	if v.nonScriptable != nil {
 		v.nonScriptable.Release()
 		v.nonScriptable = nil
+	}
+	if v.displayClient != nil {
+		v.displayClient.Release()
+		v.displayClient = nil
 	}
 	if v.advanced != nil {
 		v.advanced.Release()
