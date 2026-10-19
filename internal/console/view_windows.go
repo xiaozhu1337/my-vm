@@ -267,6 +267,10 @@ func (v *viewer) initialize() error {
 	}
 	server := v.vmid
 	if v.wayland {
+		// SmartSizing needs EnableZoom to enlarge a desktop beyond its native resolution.
+		if err = extended(v.client, "EnableZoom", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
+			return fmt.Errorf("启用 Linux 桌面画面缩放: %w", err)
+		}
 		server = "127.0.0.1"
 		if err = put(v.advanced, "RDPPort", v.rdpPort); err != nil {
 			return err
@@ -353,7 +357,8 @@ func (v *viewer) resize() {
 	if connected && !v.display.connected {
 		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
 	}
-	if !v.enhanced {
+	// Wayland shares an existing desktop; let SmartSizing fit it without requesting a new resolution.
+	if !v.enhanced || v.wayland {
 		v.display.connected = connected
 		return
 	}
