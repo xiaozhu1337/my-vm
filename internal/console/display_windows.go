@@ -27,8 +27,12 @@ func (v *viewer) dismissHeader() {
 	if v.closed || v.headerHidden {
 		return
 	}
+	declined := v.toolbar != nil && (v.toolbar.prompt == promptEnhanced || v.toolbar.prompt == promptEnhancedTry)
 	v.headerHidden = true
 	v.clearPrompt()
+	if declined {
+		v.toolbar.availability.notified = true
+	}
 	for _, handle := range []uintptr{v.header, v.headerClose} {
 		if handle != 0 {
 			user32.NewProc("ShowWindow").Call(handle, 0)

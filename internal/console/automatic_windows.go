@@ -63,11 +63,6 @@ func queryDisplay(runtimeID, kind string) (displayCapability, error) {
 
 func displayFromGuest(client *http.Client, kind string) (displayCapability, error) {
 	args := []string{"/bin/sh", "-c", linuxDisplayQuery}
-	if kind == "windows-ready" {
-		// A positive agent signal supplements optional VMMS WMI; it never gates opening a window.
-		args = []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; $services=Get-Service -Name vmicrdv,TermService; if (@($services | Where-Object {$_.Status -ne 'Running'}).Count -ne 0) {exit 1}; 'windows'`}
-		kind = "windows"
-	}
 	data, err := json.Marshal(guestops.Command{Args: args, Timeout: 2})
 	if err != nil {
 		return displayCapability{}, err

@@ -6,9 +6,40 @@ import (
 	"context"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestDesktopStatusProtocolSessionAndLock(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PATH", root)
+	t.Setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
+	defer desktopListening.Store(desktopListening.Load())
+	for _, test := range []struct {
+		session, locked, state, reason string
+		bridge                         bool
+	}{{"tty", "no", "unsupported", "session_unsupported", false}, {"x11", "yes", "ready", "desktop_service_running", false},
+		{"wayland", "yes", "waiting", "session_locked", true}, {"x11", "no", "ready", "desktop_service_running", false}, {"wayland", "no", "waiting", "desktop_bridge_stopped", false}, {"wayland", "no", "ready", "desktop_service_running", true}} {
+		t.Setenv("XDG_SESSION_TYPE", test.session)
+		for name, body := range map[string]string{"loginctl": "echo " + test.locked, "systemctl": "exit 0", "gdbus": "echo '(<uint16 3389>,)'"} {
+			if err := os.WriteFile(filepath.Join(root, name), []byte("#!/bin/sh\n"+body+"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		desktopListening.Store(test.bridge)
+		status := desktopStatus(context.Background())
+		if status.Desktop.State != test.state || status.Desktop.Reason != test.reason || status.Validate() != nil {
+			t.Fatalf("unexpected desktop status: %+v", status)
+		}
+	}
+	t.Setenv("XDG_SESSION_TYPE", "wayland")
+	t.Setenv("PATH", t.TempDir())
+	if status := desktopStatus(context.Background()); status.Desktop.State != "unknown" {
+		t.Fatalf("query failure asserted readiness: %+v", status)
+	}
+}
 
 func TestDesktopPortFromNegotiatedGNOMEProperty(t *testing.T) {
 	for _, data := range []string{"(<3390>,)", "(<int32 3390>,)", "(<uint16 3390>,)\n"} {

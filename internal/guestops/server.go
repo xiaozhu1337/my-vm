@@ -45,8 +45,11 @@ func (w *limitedOutput) Write(data []byte) (int, error) {
 	return count, nil
 }
 
-func Handler() http.Handler {
+func Handler() http.Handler { return handler(nil) }
+
+func handler(status StatusProvider) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/status", statusHandler(status))
 	mux.HandleFunc("POST /exec", execute)
 	mux.HandleFunc("GET /file", download)
 	mux.HandleFunc("PUT /file", upload)

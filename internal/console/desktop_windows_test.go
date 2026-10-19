@@ -25,6 +25,16 @@ func (f desktopTransport) RoundTrip(request *http.Request) (*http.Response, erro
 func TestMain(m *testing.M) {
 	if len(os.Args) == 5 && os.Args[1] == "--console" && os.Args[2] == "--detect-ready" {
 		state := os.Args[3]
+		if state == "legacy-slow" {
+			if strings.HasSuffix(os.Args[4], "-status") {
+				time.Sleep(2 * time.Second)
+				fmt.Println("unknown")
+			} else {
+				time.Sleep(1500 * time.Millisecond)
+				fmt.Println("ready")
+			}
+			os.Exit(0)
+		}
 		if state == "blocked" {
 			for {
 				time.Sleep(time.Second)

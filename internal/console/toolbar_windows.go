@@ -35,6 +35,7 @@ type toolbarPrompt uint8
 const (
 	promptNone toolbarPrompt = iota
 	promptEnhanced
+	promptEnhancedTry
 	promptShutdown
 )
 
@@ -331,6 +332,10 @@ func (v *viewer) clearPrompt() {
 	if v.toolbar == nil || v.toolbar.prompt == promptNone {
 		return
 	}
+	if v.toolbar.prompt == promptEnhanced || v.toolbar.prompt == promptEnhancedTry {
+		v.toolbar.availability.notified = false
+		v.toolbar.availability.next = time.Now().Add(15 * time.Second)
+	}
 	v.toolbar.prompt = promptNone
 	v.status, v.statusError = v.toolbar.promptStatus, v.toolbar.promptError
 	v.toolbar.promptStatus, v.toolbar.promptError = "", false
@@ -355,6 +360,8 @@ func (v *viewer) revealHeader() {
 
 func (p toolbarPrompt) labels() (string, string, string) {
 	switch p {
+	case promptEnhancedTry:
+		return "暂未确认增强连接状态，可尝试切换；连接失败会返回基础画面。", "尝试增强", "暂不"
 	case promptEnhanced:
 		return "增强画面已就绪，可切换以使用更多桌面功能。", "切换增强", "暂不"
 	case promptShutdown:
@@ -385,11 +392,14 @@ func (v *viewer) finishPrompt(confirmed bool) {
 	}
 	prompt := v.toolbar.prompt
 	v.dismissHeader()
+	if confirmed && (prompt == promptEnhanced || prompt == promptEnhancedTry) {
+		v.toolbar.availability.notified = false
+	}
 	if !confirmed {
 		return
 	}
 	switch prompt {
-	case promptEnhanced:
+	case promptEnhanced, promptEnhancedTry:
 		if !v.enhanced {
 			v.switchDisplay(true, true)
 		}

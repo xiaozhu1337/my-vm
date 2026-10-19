@@ -10,12 +10,12 @@ import (
 	"my-vm/internal/sharing"
 )
 
-func services(ctx context.Context, cancel context.CancelFunc, log io.Writer, mapShares func([]sharing.Share) error, desktop func(context.Context, io.Writer), ready func() error, update func(string)) error {
+func services(ctx context.Context, cancel context.CancelFunc, log io.Writer, mapShares func([]sharing.Share) error, desktop func(context.Context, io.Writer), status guestops.StatusProvider, ready func() error, update func(string)) error {
 	startup := make(chan error, 2)
 	results := make(chan error, 1)
 	var workers sync.WaitGroup
 	workers.Go(func() { desktop(ctx, log) })
-	workers.Go(func() { guestops.RunReady(ctx, log, func(err error) { startup <- err }) })
+	workers.Go(func() { guestops.RunStatus(ctx, log, func(err error) { startup <- err }, status) })
 	workers.Go(func() {
 		results <- sharing.RunProxyReady(ctx, log, mapShares, func(err error) { startup <- err }, func(err error) {
 			if ctx.Err() != nil {

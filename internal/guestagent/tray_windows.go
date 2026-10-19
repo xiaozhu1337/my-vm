@@ -17,10 +17,11 @@ import (
 	"github.com/egoist/mygo"
 	"golang.org/x/sys/windows"
 	"my-vm/assets"
+	"my-vm/internal/guestops"
 	"my-vm/internal/sharing"
 )
 
-func Run(ctx context.Context, cancel context.CancelFunc, log io.Writer, mapShares func([]sharing.Share) error, desktop func(context.Context, io.Writer), readyEvent string) error {
+func Run(ctx context.Context, cancel context.CancelFunc, log io.Writer, mapShares func([]sharing.Share) error, desktop func(context.Context, io.Writer), status guestops.StatusProvider, readyEvent string) error {
 	release, active, err := acquire(ctx, cancel)
 	if err != nil {
 		return err
@@ -30,7 +31,7 @@ func Run(ctx context.Context, cancel context.CancelFunc, log io.Writer, mapShare
 	}
 	defer release()
 	return runTray(ctx, cancel, log, func(update func(string)) error {
-		return services(ctx, cancel, log, mapShares, desktop, func() error {
+		return services(ctx, cancel, log, mapShares, desktop, status, func() error {
 			update("代理运行中 · 正在连接主机共享目录")
 			return signalReady(readyEvent)
 		}, update)

@@ -4,6 +4,8 @@ package console
 
 import (
 	"context"
+	"fmt"
+	"my-vm/internal/guestops"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,7 +17,8 @@ import (
 )
 
 type enhancedAvailability struct {
-	results            chan bool
+	results            chan string
+	last               string
 	next               time.Time
 	checking, notified bool
 }
@@ -27,7 +30,7 @@ func (a *enhancedAvailability) start(now time.Time) bool {
 	a.checking = true
 	a.next = now.Add(15 * time.Second)
 	if a.results == nil {
-		a.results = make(chan bool, 1)
+		a.results = make(chan string, 1)
 	}
 	return true
 }
@@ -41,12 +44,12 @@ func (a *enhancedAvailability) finish(ready bool) bool {
 	return true
 }
 
-func enhancedAvailable(ctx context.Context, runtimeID, kind string) bool {
-	state := probeAvailability(ctx, runtimeID, kind)
-	if state == "unknown" && kind == "windows" && ctx.Err() == nil {
-		state = probeAvailability(ctx, runtimeID, "windows-agent")
+func enhancedState(ctx context.Context, runtimeID, kind string) string {
+	state := probeAvailability(ctx, runtimeID, kind+"-status")
+	if state != "unknown" || ctx.Err() != nil {
+		return state
 	}
-	return state == "ready"
+	return probeAvailability(ctx, runtimeID, kind)
 }
 
 func probeAvailability(parent context.Context, runtimeID, kind string) string {
@@ -62,14 +65,32 @@ func probeAvailability(parent context.Context, runtimeID, kind string) string {
 	defer clear(output)
 	if err == nil && len(output) <= 16 {
 		state := strings.TrimSpace(string(output))
-		if state == "ready" || state == "waiting" || state == "unknown" {
+		if state == "ready" || state == "waiting" || state == "unknown" || state == "available" || state == "unsupported" {
 			return state
 		}
 	}
 	return "unknown"
 }
 
+func protocolAvailability(clientStatus guestops.Status, kind string) string {
+	if kind == "windows" && clientStatus.OS != "windows" || kind != "windows" && clientStatus.OS != "linux" || (kind == "x11" || kind == "wayland") && clientStatus.Desktop.Mode != kind {
+		return "unsupported"
+	}
+	return clientStatus.Desktop.State
+}
+
 func queryEnhancedAvailability(runtimeID, kind string) string {
+	if strings.HasSuffix(kind, "-status") {
+		kind = strings.TrimSuffix(kind, "-status")
+		if client, err := guestClient(runtimeID); err == nil {
+			status, e := guestops.ReadStatus(context.Background(), client)
+			client.CloseIdleConnections()
+			if e == nil {
+				return protocolAvailability(status, kind)
+			}
+		}
+		return "unknown"
+	}
 	if kind == "windows" {
 		known, available := hcs.EnhancedSessionState(runtimeID)
 		if !known {
@@ -81,17 +102,7 @@ func queryEnhancedAvailability(runtimeID, kind string) string {
 		return "waiting"
 	}
 	if kind == "windows-agent" {
-		client, err := guestClient(runtimeID)
-		if err != nil {
-			return "waiting"
-		}
-		defer client.CloseIdleConnections()
-		capability, err := displayFromGuest(client, "windows-ready")
-		clear(capability.Password)
-		if err == nil && capability.Mode == "windows" {
-			return "ready"
-		}
-		return "waiting"
+		return "unknown"
 	}
 	capability, err := queryDisplay(runtimeID, kind)
 	clear(capability.Password)
@@ -102,7 +113,7 @@ func queryEnhancedAvailability(runtimeID, kind string) string {
 }
 
 func (v *viewer) checkEnhancedAvailability() {
-	if v.closed || v.enhanced || v.toolbar == nil || v.toolbar.busy {
+	if v.closed || v.enhanced || v.toolbar == nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
 		return
 	}
 	bar := v.toolbar
@@ -117,9 +128,9 @@ func (v *viewer) checkEnhancedAvailability() {
 		}
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(bar.ctx, 8*time.Second)
+		ctx, cancel := context.WithTimeout(bar.ctx, 9*time.Second)
 		defer cancel()
-		ready := enhancedAvailable(ctx, runtimeID, kind)
+		ready := enhancedState(ctx, runtimeID, kind)
 		if bar.ctx.Err() != nil {
 			return
 		}
@@ -133,17 +144,29 @@ func (v *viewer) enhancedAvailabilityResult() {
 		return
 	}
 	availability := &v.toolbar.availability
+	prompt := promptEnhanced
 	select {
-	case ready := <-availability.results:
+	case state := <-availability.results:
+		if state != availability.last {
+			availability.last = state
+			if v.log != nil {
+				fmt.Fprintln(v.log, "增强状态:", state)
+			}
+		}
 		if v.enhanced || v.toolbar.busy || v.toolbar.prompt != promptNone {
 			availability.checking = false
 			return
 		}
-		if !availability.finish(ready) {
+		offer := state == "ready"
+		if !v.linux && v.display.connected && (state == "unknown" || state == "available") {
+			offer = true
+			prompt = promptEnhancedTry
+		}
+		if !availability.finish(offer) {
 			return
 		}
 	default:
 		return
 	}
-	v.showPrompt(promptEnhanced)
+	v.showPrompt(prompt)
 }

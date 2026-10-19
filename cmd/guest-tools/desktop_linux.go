@@ -7,15 +7,60 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"my-vm/internal/guestops"
 	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+var desktopListening atomic.Bool
+
+func desktopStatus(ctx context.Context) guestops.Status {
+	status := guestops.Status{Protocol: guestops.ProtocolVersion, OS: "linux", Desktop: guestops.DesktopStatus{State: "unsupported", Reason: "session_unsupported"}}
+	status.Desktop.Mode = os.Getenv("XDG_SESSION_TYPE")
+	if status.Desktop.Mode != "wayland" && status.Desktop.Mode != "x11" {
+		status.Desktop.Mode = ""
+		return status
+	}
+	status.Desktop.State, status.Desktop.Reason = "unknown", "session_query_failed"
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if status.Desktop.Mode == "x11" {
+		if exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "xrdp").Run() == nil {
+			status.Desktop.State, status.Desktop.Reason = "ready", "desktop_service_running"
+		} else {
+			status.Desktop.State, status.Desktop.Reason = "waiting", "desktop_service_stopped"
+		}
+		return status
+	}
+	locked, err := exec.CommandContext(ctx, "loginctl", "show-session", "auto", "-p", "LockedHint", "--value").Output()
+	if err != nil {
+		return status
+	}
+	if strings.TrimSpace(string(locked)) == "yes" {
+		status.Desktop.State, status.Desktop.Reason = "waiting", "session_locked"
+		return status
+	}
+	if strings.TrimSpace(string(locked)) != "no" {
+		return status
+	}
+	status.Desktop.State, status.Desktop.Reason = "waiting", "desktop_service_stopped"
+	if !desktopListening.Load() {
+		status.Desktop.Reason = "desktop_bridge_stopped"
+		return status
+	}
+	if _, err = desktopAddress(ctx); err != nil {
+		return status
+	}
+	status.Desktop.State, status.Desktop.Reason = "ready", "desktop_service_running"
+	return status
+}
 
 // Keep the desktop's authenticated RDP stream on the VM-specific Hyper-V socket.
 func runDesktop(ctx context.Context, log io.Writer) {
@@ -39,6 +84,8 @@ func serveDesktop(ctx context.Context, log io.Writer) error {
 	if err = unix.Listen(fd, 4); err != nil {
 		return err
 	}
+	desktopListening.Store(true)
+	defer desktopListening.Store(false)
 	active := make(chan struct{}, 4)
 	for ctx.Err() == nil {
 		polls := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}

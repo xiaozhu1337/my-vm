@@ -137,6 +137,37 @@ func TestToolbarResultSurvivesConnectionStatusRefresh(t *testing.T) {
 	}
 }
 
+func TestStatusNoticeUnknownAndRearming(t *testing.T) {
+	for _, test := range []struct {
+		state            string
+		linux, connected bool
+		prompt           toolbarPrompt
+	}{{"unknown", false, true, promptEnhancedTry}, {"available", false, true, promptEnhancedTry}, {"waiting", false, true, promptNone}, {"unsupported", false, true, promptNone}, {"unknown", true, true, promptNone}, {"unknown", false, false, promptNone}, {"ready", false, true, promptEnhanced}} {
+		bar := &consoleToolbar{availability: enhancedAvailability{results: make(chan string, 1)}}
+		bar.availability.results <- test.state
+		v := &viewer{toolbar: bar, linux: test.linux, headerHidden: true, display: displayUpdate{connected: test.connected}, log: io.Discard}
+		v.enhancedAvailabilityResult()
+		if bar.prompt != test.prompt {
+			t.Fatalf("state=%s prompt=%d want=%d", test.state, bar.prompt, test.prompt)
+		}
+		if test.prompt == promptNone {
+			continue
+		}
+		if v.headerHidden {
+			t.Fatal("offer remained hidden")
+		}
+		v.clearPrompt()
+		if bar.availability.notified || !bar.availability.next.After(time.Now()) {
+			t.Fatal("programmatic cleanup consumed offer permanently")
+		}
+		v.showPrompt(test.prompt)
+		v.finishPrompt(false)
+		if !bar.availability.notified {
+			t.Fatal("explicit refusal did not suppress further offers")
+		}
+	}
+}
+
 func TestEnhancedAvailabilityDoesNotInterruptOrRepeat(t *testing.T) {
 	now := time.Now()
 	var state enhancedAvailability
@@ -158,8 +189,8 @@ func TestEnhancedAvailabilityDoesNotInterruptOrRepeat(t *testing.T) {
 			t.Fatal("probe started while enhanced, closed, or handling a user operation")
 		}
 	}
-	bar := &consoleToolbar{availability: enhancedAvailability{checking: true, results: make(chan bool, 1)}}
-	bar.availability.results <- true
+	bar := &consoleToolbar{availability: enhancedAvailability{checking: true, results: make(chan string, 1)}}
+	bar.availability.results <- "ready"
 	v := &viewer{enhanced: true, toolbar: bar}
 	v.enhancedAvailabilityResult()
 	if bar.availability.notified || bar.availability.checking {
@@ -167,26 +198,34 @@ func TestEnhancedAvailabilityDoesNotInterruptOrRepeat(t *testing.T) {
 	}
 }
 
+func TestStatusCompatibilityHasItsOwnTimeBudget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
+	defer cancel()
+	if got := enhancedState(ctx, "legacy-slow", "linux"); got != "ready" {
+		t.Fatalf("protocol probe consumed fallback budget: %s", got)
+	}
+}
+
 func TestEnhancedAvailabilityProbeIsBoundedAndConservative(t *testing.T) {
 	for _, test := range []struct {
 		runtime, kind string
-		ready         bool
+		state         string
 	}{
-		{"ready", "windows", true}, {"waiting", "windows", false},
-		{"fallback", "windows", true}, {"unknown", "windows", false},
-		{"garbage", "windows", false}, {"ready", "wayland", true},
+		{"ready", "windows", "ready"}, {"waiting", "windows", "waiting"},
+		{"available", "windows", "available"}, {"unknown", "windows", "unknown"},
+		{"garbage", "windows", "unknown"}, {"ready", "wayland", "ready"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		got := enhancedAvailable(ctx, test.runtime, test.kind)
+		got := enhancedState(ctx, test.runtime, test.kind)
 		cancel()
-		if got != test.ready {
-			t.Fatalf("unexpected readiness: runtime=%s kind=%s ready=%v", test.runtime, test.kind, got)
+		if got != test.state {
+			t.Fatalf("unexpected readiness: runtime=%s kind=%s state=%s", test.runtime, test.kind, got)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	if enhancedAvailable(ctx, "blocked", "windows") || time.Since(started) > 2*time.Second {
+	if enhancedState(ctx, "blocked", "windows") != "unknown" || time.Since(started) > 2*time.Second {
 		t.Fatal("hung provider was not bounded by the helper process")
 	}
 	if err := Run([]string{"--detect-ready", "id", "invalid"}, io.Discard); err == nil || err.Error() != "控制台会话参数无效" {
@@ -195,9 +234,9 @@ func TestEnhancedAvailabilityProbeIsBoundedAndConservative(t *testing.T) {
 }
 
 func TestInlineNoticesRequireAUserDecision(t *testing.T) {
-	bar := &consoleToolbar{availability: enhancedAvailability{checking: true, results: make(chan bool, 1)}}
+	bar := &consoleToolbar{availability: enhancedAvailability{checking: true, results: make(chan string, 1)}}
 	v := &viewer{toolbar: bar, headerHidden: true, log: io.Discard}
-	bar.availability.results <- true
+	bar.availability.results <- "ready"
 	v.enhancedAvailabilityResult()
 	if v.enhanced || bar.busy || bar.prompt != promptEnhanced || v.headerHidden || !bar.availability.notified {
 		t.Fatal("readiness switched the display or failed to show a notice")
@@ -228,8 +267,8 @@ func TestInlineNoticesRequireAUserDecision(t *testing.T) {
 	}
 
 	v.showPrompt(promptShutdown)
-	bar.availability = enhancedAvailability{checking: true, results: make(chan bool, 1)}
-	bar.availability.results <- true
+	bar.availability = enhancedAvailability{checking: true, results: make(chan string, 1)}
+	bar.availability.results <- "ready"
 	v.enhancedAvailabilityResult()
 	if bar.prompt != promptShutdown || bar.availability.notified {
 		t.Fatal("a readiness result replaced a user confirmation")

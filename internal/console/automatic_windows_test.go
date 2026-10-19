@@ -17,6 +17,24 @@ import (
 	"unsafe"
 )
 
+func TestProtocolAvailabilityRespectsModeAndState(t *testing.T) {
+	for _, test := range []struct{ os, mode, state, kind, want string }{{"linux", "wayland", "ready", "windows", "unsupported"}, {"windows", "windows", "ready", "windows", "ready"}, {"windows", "windows", "available", "windows", "available"}, {"linux", "wayland", "waiting", "linux", "waiting"}, {"linux", "wayland", "ready", "x11", "unsupported"}, {"windows", "windows", "ready", "linux", "unsupported"}, {"linux", "x11", "unsupported", "linux", "unsupported"}} {
+		status := guestops.Status{Protocol: 1, OS: test.os, Desktop: guestops.DesktopStatus{Mode: test.mode, State: test.state}}
+		if test.want == "unsupported" {
+			bar := &consoleToolbar{availability: enhancedAvailability{results: make(chan string, 1)}}
+			bar.availability.results <- protocolAvailability(status, test.kind)
+			v := &viewer{toolbar: bar, display: displayUpdate{connected: true}, log: io.Discard}
+			v.enhancedAvailabilityResult()
+			if bar.prompt != promptNone {
+				t.Fatal("mismatched guest triggered an invitation")
+			}
+		}
+		if got := protocolAvailability(status, test.kind); got != test.want {
+			t.Fatalf("status mode mapping got %s want %s", got, test.want)
+		}
+	}
+}
+
 func TestDisplayCapabilityDoesNotMixRDPAndVNCPasswords(t *testing.T) {
 	for _, test := range []struct {
 		input, mode, name, password string
@@ -53,7 +71,6 @@ func TestDisplayProbeRejectsFailedAndMismatchedDesktop(t *testing.T) {
 		{"linux", "x11", 0, false, false},
 		{"linux", "wayland", 0, false, false}, {"x11", "wayland", 0, false, true},
 		{"wayland", "x11", 0, false, true}, {"windows", "wayland", 0, false, true},
-		{"windows-ready", "windows", 0, false, false}, {"windows-ready", "windows", 1, false, true},
 		{"linux", "windows", 0, false, true}, {"linux", "wayland", 1, false, true},
 		{"linux", "wayland", 0, true, true},
 	} {
@@ -65,11 +82,7 @@ func TestDisplayProbeRejectsFailedAndMismatchedDesktop(t *testing.T) {
 			if r.URL.Path != "/exec" || command.Timeout != 2 {
 				t.Fatal("unbounded or unrelated query")
 			}
-			if test.kind == "windows-ready" {
-				if command.Args[0] != "powershell.exe" || !strings.Contains(command.Args[len(command.Args)-1], "vmicrdv,TermService") {
-					t.Fatal("readiness query did not check the desktop services")
-				}
-			} else if test.kind != "windows" && (len(command.Args) != 3 || command.Args[0] != "/bin/sh" || command.Args[2] != linuxDisplayQuery) {
+			if test.kind != "windows" && (len(command.Args) != 3 || command.Args[0] != "/bin/sh" || command.Args[2] != linuxDisplayQuery) {
 				t.Fatal("unexpected guest command")
 			}
 			data, _ := json.Marshal(guestops.Result{ExitCode: test.exit, Stdout: []byte(test.mode + "\n"), Truncated: test.truncated})

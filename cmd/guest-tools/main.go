@@ -59,7 +59,7 @@ func main() {
 	} else {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
-		err = guestagent.Run(ctx, cancel, logger, mapShares, runDesktop, readyEvent)
+		err = guestagent.Run(ctx, cancel, logger, mapShares, runDesktop, desktopStatus, readyEvent)
 	}
 	if err != nil {
 		fmt.Fprintln(logger, err)

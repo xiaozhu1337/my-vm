@@ -5,9 +5,25 @@ package main
 import (
 	"errors"
 	"golang.org/x/sys/windows/svc"
+	"my-vm/internal/guestops"
 	"testing"
 	"time"
 )
+
+func TestWindowsDesktopServiceStates(t *testing.T) {
+	for _, test := range []struct {
+		rdv, terminal svc.State
+		state         string
+	}{{svc.Running, svc.Running, "ready"}, {svc.Stopped, svc.Running, "available"}, {svc.Stopped, svc.Stopped, "available"}, {svc.StartPending, svc.Running, "waiting"}, {svc.Paused, svc.Running, "waiting"}} {
+		desktop := windowsDesktopStatus(test.rdv, test.terminal)
+		if desktop.State != test.state {
+			t.Fatalf("trigger-start service readiness: %+v", desktop)
+		}
+		if err := (guestops.Status{Protocol: 1, OS: "windows", Desktop: desktop}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestWaitServiceRunningAndFailure(t *testing.T) {
 	count := 0

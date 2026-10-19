@@ -18,12 +18,57 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc/mgr"
 	"my-vm/internal/guestagent"
+	"my-vm/internal/guestops"
 	"my-vm/internal/sharing"
 )
 
 var mpr = windows.NewLazySystemDLL("mpr.dll")
 
 func runDesktop(context.Context, io.Writer) {}
+
+func desktopStatus(context.Context) guestops.Status {
+	status := guestops.Status{Protocol: guestops.ProtocolVersion, OS: "windows", Desktop: guestops.DesktopStatus{Mode: "windows", State: "unknown", Reason: "service_query_failed"}}
+	handle, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return status
+	}
+	defer windows.CloseServiceHandle(handle)
+	result := make([]svc.State, 0, 2)
+	for _, name := range []string{"vmicrdv", "TermService"} {
+		serviceHandle, e := windows.OpenService(handle, windows.StringToUTF16Ptr(name), windows.SERVICE_QUERY_STATUS|windows.SERVICE_QUERY_CONFIG)
+		if errors.Is(e, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			status.Desktop.State, status.Desktop.Reason = "unsupported", "service_missing"
+			return status
+		}
+		if e != nil {
+			return status
+		}
+		service := mgr.Service{Name: name, Handle: serviceHandle}
+		config, e := service.Config()
+		state, queryErr := service.Query()
+		service.Close()
+		if e != nil || queryErr != nil {
+			return status
+		}
+		if config.StartType == windows.SERVICE_DISABLED {
+			status.Desktop.State, status.Desktop.Reason = "unsupported", "service_disabled"
+			return status
+		}
+		result = append(result, state.State)
+	}
+	status.Desktop = windowsDesktopStatus(result[0], result[1])
+	return status
+}
+
+func windowsDesktopStatus(rdv, terminal svc.State) guestops.DesktopStatus {
+	result := guestops.DesktopStatus{Mode: "windows", State: "waiting", Reason: "service_starting"}
+	if rdv == svc.Running && terminal == svc.Running {
+		result.State, result.Reason = "ready", "services_running"
+	} else if (rdv == svc.Stopped || rdv == svc.Running) && (terminal == svc.Stopped || terminal == svc.Running) {
+		result.State, result.Reason = "available", "service_trigger_start"
+	}
+	return result
+}
 
 func installUser() error {
 	root, err := os.UserConfigDir()

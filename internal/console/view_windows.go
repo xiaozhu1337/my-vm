@@ -235,7 +235,7 @@ func Run(args []string, log io.Writer) error {
 	}
 	if readinessProbe != "" && probe == "" && displayProbe == "" && flags.NArg() == 1 && v.pipe == "" && !v.enhanced && !v.automatic && !v.linux && !v.wayland && !x11 {
 		kind := flags.Arg(0)
-		if kind != "windows" && kind != "windows-agent" && kind != "linux" && kind != "wayland" && kind != "x11" {
+		if base := strings.TrimSuffix(kind, "-status"); base != "windows" && base != "windows-agent" && base != "linux" && base != "wayland" && base != "x11" {
 			return fmt.Errorf("控制台会话参数无效")
 		}
 		fmt.Fprintln(os.Stdout, queryEnhancedAvailability(readinessProbe, kind))
