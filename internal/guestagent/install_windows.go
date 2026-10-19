@@ -24,7 +24,7 @@ func SetStartup(target string, enabled bool) error {
 	}
 	defer key.Close()
 	if enabled {
-		return key.SetStringValue("MyVMGuestTools", `"`+target+`"`)
+		return key.SetStringValue("MyVMGuestTools", `"`+target+`" --install=false`)
 	}
 	err = key.DeleteValue("MyVMGuestTools")
 	if errors.Is(err, registry.ErrNotExist) {
@@ -45,7 +45,7 @@ func Startup(target string) (bool, error) {
 	if errors.Is(err, registry.ErrNotExist) {
 		return false, nil
 	}
-	return value == `"`+target+`"`, err
+	return value == `"`+target+`" --install=false`, err
 }
 
 // Upgrade keeps the previous executable until the replacement is listening and startup is saved.

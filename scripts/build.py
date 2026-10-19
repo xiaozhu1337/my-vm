@@ -61,7 +61,8 @@ def build_disc(platform, payloads):
             text('autorun.inf', '[autorun]\nopen=install.exe\naction=Install MyVM Guest Enhancements\n')
             text('README.txt',
                  'MyVM Windows 离线客户机增强盘\n\n'
-                 'Windows 10/11 Pro: 双击 install.exe，以当前桌面用户授权 UAC。\n'
+                 'Windows 10/11 Pro: 双击 install.exe 或 my-vm-guest.exe，默认安装全部适用增强功能，无需参数。\n'
+                 '请使用当前桌面用户运行并完成 UAC 授权。\n'
                  '安装共享目录、远程桌面服务和登录自启动；不访问互联网仓库。\n'
                  'GPU-PV 首次准备或驱动升级请在基础控制台运行；已有驱动匹配且设备正常时可在增强会话重复安装。\n'
                  '安装后在主机点击“打开画面”，已就绪时自动使用增强；账户需设置登录密码。\n'
@@ -80,6 +81,7 @@ def build_disc(platform, payloads):
                  'MyVM Linux 离线客户机增强盘\n\n'
                  'Ubuntu / Kubuntu 26.04、26.10 amd64: 在已登录的 GNOME/KDE Wayland 桌面终端运行：\n'
                  'python3 "/media/实际光盘路径/install.py"\n'
+                 '默认安装全部适用增强功能，无需 --install；请勿使用 sudo，在授权窗口确认管理员权限。\n'
                  '也可在文件管理器允许启动 install.desktop；若桌面阻止光盘启动器，请使用上述终端命令。\n'
                  '包含本地依赖、共享目录、远程桌面证书和服务、自启动；不访问互联网仓库。\n'
                  'GNOME/KDE 自动生成独立连接凭据，分别存入密钥环/KWallet，并按虚拟机回传保存到宿主凭据管理器。\n'

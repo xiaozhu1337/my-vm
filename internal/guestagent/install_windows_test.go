@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,6 +38,9 @@ func agentHelper() {
 		}
 		return
 	}
+	if !slices.Contains(os.Args[1:], "--install=false") {
+		os.Exit(13)
+	}
 	if mode == "failed" {
 		os.Exit(7)
 	}
@@ -47,7 +51,7 @@ func agentHelper() {
 			}
 		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if mode == "graceful" {
 		release, active, err := acquire(ctx, cancel)
@@ -102,7 +106,8 @@ func executableCopy(t *testing.T) string {
 func helper(t *testing.T, target, mode string) (*exec.Cmd, uint16) {
 	t.Helper()
 	ready := filepath.Join(t.TempDir(), "ready")
-	command := exec.Command(target)
+	command := exec.Command(target, "--install=false")
+	command.Stderr = os.Stderr
 	command.Env = append(os.Environ(), "MY_VM_AGENT_HELPER=1", "MY_VM_AGENT_MODE="+mode, "MY_VM_AGENT_READY_FILE="+ready)
 	if err := command.Start(); err != nil {
 		t.Fatal(err)

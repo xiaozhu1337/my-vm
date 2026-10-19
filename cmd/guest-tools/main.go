@@ -14,13 +14,16 @@ import (
 var mediaRoot, installDesktop, installUserSID, readyEvent string
 
 func main() {
-	install := flag.Bool("install", filepath.Base(os.Args[0]) == "install.exe", "Install all guest enhancements for this user")
+	install := flag.Bool("install", true, "Install all guest enhancements for this user; false runs the installed agent")
 	prepare := flag.Bool("prepare", false, "Prepare guest system components")
 	flag.StringVar(&mediaRoot, "media", "", "Root directory of the offline enhancement disc")
 	flag.StringVar(&installDesktop, "desktop", "", "Desktop selected for privileged component preparation")
 	flag.StringVar(&installUserSID, "user-sid", "", "Original desktop user receiving remote desktop access")
 	flag.StringVar(&readyEvent, "ready-event", "", "Private installer startup notification")
 	flag.Parse()
+	if *prepare {
+		*install = false
+	}
 	if mediaRoot == "" {
 		if exe, err := os.Executable(); err == nil {
 			mediaRoot = filepath.Dir(exe)

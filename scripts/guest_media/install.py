@@ -15,7 +15,7 @@ def main():
         with os.fdopen(descriptor, 'wb') as target, (media / 'my-vm-guest-linux-amd64').open('rb') as source:
             shutil.copyfileobj(source, target)
         executable.chmod(0o700)
-        result = subprocess.run([str(executable), '--install', '--media', str(media)], check=False)
+        result = subprocess.run([str(executable), '--media', str(media)], check=False)
         raise SystemExit(result.returncode)
     finally:
         executable.unlink(missing_ok=True)

@@ -101,7 +101,7 @@ func runTray(ctx context.Context, cancel context.CancelFunc, log io.Writer, work
 
 // restartPrevious also supports agents predating the private --ready-event flag.
 func restartPrevious(target string) (err error) {
-	command := exec.Command(target)
+	command := exec.Command(target, "--install=false")
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err = command.Start(); err != nil {
 		return err
@@ -157,7 +157,7 @@ func StartAgent(target string) (func() error, error) {
 		return nil, err
 	}
 	defer windows.CloseHandle(event)
-	command := exec.Command(target, "--ready-event", name)
+	command := exec.Command(target, "--install=false", "--ready-event", name)
 	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err = command.Start(); err != nil {
 		return nil, err

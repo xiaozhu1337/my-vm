@@ -28,7 +28,7 @@ func installationResult(err error) {
 }
 func installUser() error {
 	if os.Geteuid() == 0 {
-		return errors.New("请使用需要访问共享目录的桌面用户运行 --install")
+		return errors.New("请以已登录图形桌面的普通用户运行安装器，不要使用 sudo；安装器会自行请求管理员授权")
 	}
 	if err := installEnhancements(); err != nil {
 		return err
@@ -39,9 +39,6 @@ func installUser() error {
 	}
 	target := filepath.Join(root, "MyVMGuestTools", "my-vm-guest")
 	if err = stopPreviousAgent(target); err != nil {
-		return err
-	}
-	if err = copySelf(target); err != nil {
 		return err
 	}
 	startup := filepath.Join(root, "autostart")
@@ -61,7 +58,7 @@ func installUser() error {
 		return err
 	}
 	unitPath := filepath.Join(unitDirectory, "my-vm-guest.service")
-	unit := "[Unit]\nDescription=MyVM guest enhancements\nAfter=graphical-session.target\nPartOf=graphical-session.target\n[Service]\nExecStart=\"" + quoted + "\"\nRestart=on-failure\nRestartSec=3\n[Install]\nWantedBy=graphical-session.target\n"
+	unit := "[Unit]\nDescription=MyVM guest enhancements\nAfter=graphical-session.target\nPartOf=graphical-session.target\n[Service]\nExecStart=\"" + quoted + "\" --install=false\nRestart=on-failure\nRestartSec=3\n[Install]\nWantedBy=graphical-session.target\n"
 	if err = os.WriteFile(unitPath, []byte(unit), 0600); err != nil {
 		return err
 	}
@@ -69,6 +66,9 @@ func installUser() error {
 		return err
 	}
 	if err = guestCommand("systemctl", "--user", "enable", "my-vm-guest.service"); err != nil {
+		return err
+	}
+	if err = copySelf(target); err != nil {
 		return err
 	}
 	return guestCommand("systemctl", "--user", "restart", "my-vm-guest.service")
