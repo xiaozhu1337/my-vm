@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"os/exec"
+	"time"
 )
 
 // Packet contains only control metadata. Credentials and diagnostic output stay in the renderer.
@@ -58,6 +59,7 @@ type event struct {
 // Host's state is owned by the UI thread. All process and pipe operations run off that thread.
 type Host struct {
 	Active, Candidate *Worker
+	Sequential        bool
 	generation        uint64
 	closed            bool
 	workers           map[*Worker]bool
@@ -88,8 +90,16 @@ func (h *Host) Begin(enhanced bool) bool {
 	h.generation++
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Worker{Generation: h.generation, Token: hex.EncodeToString(secret[:]), Enhanced: enhanced, ctx: ctx, cancel: cancel, commands: make(chan Packet, 16), layout: make(chan Packet, 1), done: make(chan struct{})}
+	var retired []*Worker
+	if h.Sequential {
+		for previous := range h.workers {
+			previous.cancel()
+			retired = append(retired, previous)
+		}
+		h.Active = nil
+	}
 	h.Candidate, h.workers[w] = w, true
-	go h.run(w)
+	go h.run(w, retired)
 	return true
 }
 
@@ -206,7 +216,18 @@ func (h *Host) Close() {
 	h.Active, h.Candidate = nil, nil
 }
 
-func (h *Host) run(w *Worker) {
+// Wait runs after the native window closes, so renderer cleanup cannot block the UI.
+func (h *Host) Wait(ctx context.Context) {
+	for w := range h.workers {
+		select {
+		case <-w.done:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (h *Host) run(w *Worker, retired []*Worker) {
 	emit := func(p Packet) {
 		select {
 		case h.events <- event{w, p}:
@@ -218,6 +239,13 @@ func (h *Host) run(w *Worker) {
 		close(w.done)
 		h.events <- event{w, Packet{Kind: "exit"}}
 	}()
+	for _, previous := range retired {
+		select {
+		case <-previous.done:
+		case <-w.ctx.Done():
+			return
+		}
+	}
 	cmd := h.factory(w)
 	cmd.Stderr = io.Discard
 	stdin, err := cmd.StdinPipe()
@@ -265,6 +293,7 @@ func (h *Host) run(w *Worker) {
 			case <-finished:
 				return
 			case <-w.ctx.Done():
+				_ = write(Packet{Kind: "close"})
 				return
 			}
 		}
@@ -272,7 +301,13 @@ func (h *Host) run(w *Worker) {
 	go func() {
 		select {
 		case <-w.ctx.Done():
-			_ = cmd.Process.Kill()
+			grace := time.NewTimer(2 * time.Second)
+			defer grace.Stop()
+			select {
+			case <-finished:
+			case <-grace.C:
+				_ = cmd.Process.Kill()
+			}
 		case <-finished:
 		}
 	}()

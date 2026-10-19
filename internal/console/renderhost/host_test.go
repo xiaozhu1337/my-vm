@@ -1,10 +1,12 @@
 package renderhost
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -101,6 +103,59 @@ func TestProcessPromotionAndExplicitClose(t *testing.T) {
 	}
 	if h.Begin(false) {
 		t.Fatal("closed host accepted new work")
+	}
+}
+
+func TestSequentialHandoverWaitsForAllRetiringRenderers(t *testing.T) {
+	for _, cancelCandidate := range []bool{false, true} {
+		t.Run(strconv.FormatBool(cancelCandidate), func(t *testing.T) {
+			h := fakeHost(t, "connected-then-hung")
+			h.Sequential = true
+			h.Begin(false)
+			basic := h.Candidate
+			pumpUntil(t, h, func() bool { return basic.Connected })
+			h.Active, h.Candidate = basic, nil
+			started := time.Now()
+			h.Begin(true)
+			candidate := h.Candidate
+			if h.Active != nil || time.Since(started) > 100*time.Millisecond {
+				t.Fatal("sequential retirement blocked the UI or retained the old connection")
+			}
+			if cancelCandidate {
+				h.Cancel()
+				h.Begin(false)
+				candidate = h.Candidate
+			}
+			pumpUntil(t, h, func() bool { return candidate.PID != 0 })
+			select {
+			case <-basic.Done():
+			default:
+				t.Fatal("replacement started before the old display stack was released")
+			}
+		})
+	}
+}
+
+func TestCloseLetsRendererDisconnect(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "disconnected")
+	h := New(func(w *Worker) *exec.Cmd {
+		return exec.Command(os.Args[0], "-test.run=^TestRendererProcessHelper$", "--", "--renderhost-test", w.Token, strconv.FormatUint(w.Generation, 10), "graceful-close", marker)
+	})
+	t.Cleanup(h.Close)
+	h.Begin(false)
+	pumpUntil(t, h, func() bool { return h.Active != nil })
+	worker := h.Active
+	h.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	h.Wait(ctx)
+	select {
+	case <-worker.Done():
+	default:
+		t.Fatal("renderer cleanup did not finish before host exit")
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "disconnected" {
+		t.Fatal("renderer was killed before receiving close", err)
 	}
 }
 
@@ -401,6 +456,11 @@ func TestRendererProcessHelper(t *testing.T) {
 	for range wake {
 		for p := s.Next(); p.Kind != ""; p = s.Next() {
 			if p.Kind == "close" {
+				if scenario == "graceful-close" {
+					if err := os.WriteFile(os.Args[index+4], []byte("disconnected"), 0600); err != nil {
+						os.Exit(3)
+					}
+				}
 				os.Exit(0)
 			}
 			if p.Kind == "layout" && p.Visible && p.Width >= 200 && p.Height >= 200 {

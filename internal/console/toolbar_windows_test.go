@@ -68,6 +68,44 @@ func TestConsoleToolbarUsesStableMachineID(t *testing.T) {
 	}
 }
 
+func TestInactiveConsoleOnlyLowersItsHost(t *testing.T) {
+	order := map[uintptr]uintptr{10: 20, 20: 30, 30: 40}
+	next := func(window uintptr) uintptr { return order[window] }
+	if !windowAbove(10, 30, next) || windowAbove(30, 10, next) || windowAbove(10, 10, next) || windowAbove(0, 30, next) || windowAbove(10, 50, next) {
+		t.Fatal("window ordering could raise an inactive host or lose its renderer")
+	}
+	calls := 0
+	if windowAbove(10, 30, func(window uintptr) uintptr { calls++; return window }) || calls > 513 {
+		t.Fatal("window destruction/reuse could make the ordering walk unbounded")
+	}
+}
+
+func TestRendererDemotesBeforeOtherApplicationsAndAuthentication(t *testing.T) {
+	topmost := ^uintptr(0)
+	notTopmost := ^uintptr(1)
+	for _, test := range []struct {
+		name                                    string
+		visible, foregroundOwn, previousTopmost bool
+		order                                   uintptr
+		show, hide, preserveOrder               bool
+	}{
+		{"host title-bar input", true, true, false, topmost, true, false, false},
+		{"guest has focus", true, true, true, topmost, true, false, false},
+		{"another application", true, false, true, notTopmost, true, false, false},
+		{"renderer-owned authentication dialog", true, false, true, notTopmost, true, false, false},
+		{"already in background", true, false, false, 0, true, false, true},
+		{"host minimized", false, false, true, notTopmost, false, true, false},
+		{"hidden background candidate", false, false, false, 0, false, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			order, flags := rendererZOrder(test.visible, test.foregroundOwn, test.previousTopmost)
+			if order != test.order || flags&0x10 == 0 || (flags&0x40 != 0) != test.show || (flags&0x80 != 0) != test.hide || (flags&0x4 != 0) != test.preserveOrder {
+				t.Fatalf("unsafe foreground transition order=%#x flags=%#x", order, flags)
+			}
+		})
+	}
+}
+
 func TestToolbarRemainsAfterHeaderDismissal(t *testing.T) {
 	for _, dpi := range []uintptr{96, 144, 192} {
 		v := &viewer{toolbar: &consoleToolbar{}}

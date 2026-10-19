@@ -3,6 +3,7 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -26,38 +27,41 @@ var atl = windows.NewLazySystemDLL("atl.dll")
 const dismissHeaderCommand = 100
 
 type viewer struct {
-	host                                             *renderhost.Host
-	renderer                                         *renderhost.Session
-	parent, parentPID, renderWindow                  uintptr
-	renderToken                                      string
-	renderGeneration                                 uint64
-	rendererMode, reportedConnected, reportedFailure bool
-	reportedLayout                                   bool
-	hwnd, header, headerClose, child                 uintptr
-	headerHidden, statusError                        bool
-	toolbar                                          *consoleToolbar
-	machineID, linuxMode                             string
-	client, advanced                                 *ole.IDispatch
-	context, connector, nonScriptable                *ole.IUnknown
-	displayClient                                    *ole.IUnknown
-	callback                                         *connectorCallback
-	events                                           *sessionEvents
-	eventPoint                                       *ole.IConnectionPoint
-	eventCookie                                      uint32
-	loggedIn                                         bool
-	generation                                       uintptr
-	loginTarget, loginNotice                         string
-	pendingLogin, automaticLogin                     *loginCredential
-	automatic, fallbackPending                       bool
-	fallbackReason                                   string
-	enhanced, clipboard, linux, wayland, closed      bool
-	stopBridge                                       func()
-	rdpPort                                          int
-	pipe, vmid, title, status                        string
-	log                                              io.Writer
-	layout                                           displaySettings
-	display                                          displayUpdate
-	displayError                                     string
+	host                                                        *renderhost.Host
+	renderer                                                    *renderhost.Session
+	parent, parentPID, renderWindow                             uintptr
+	renderToken                                                 string
+	renderGeneration                                            uint64
+	rendererMode, reportedConnected, reportedFailure            bool
+	reportedLayout                                              bool
+	rendererTopmost, rendererLayoutVisible, rendererLayoutKnown bool
+	foregroundHook                                              uintptr
+	hostTopmost, adjustingLayer                                 bool
+	hwnd, header, headerClose, child                            uintptr
+	headerHidden, statusError                                   bool
+	toolbar                                                     *consoleToolbar
+	machineID, linuxMode                                        string
+	client, advanced                                            *ole.IDispatch
+	context, connector, nonScriptable                           *ole.IUnknown
+	displayClient                                               *ole.IUnknown
+	callback                                                    *connectorCallback
+	events                                                      *sessionEvents
+	eventPoint                                                  *ole.IConnectionPoint
+	eventCookie                                                 uint32
+	loggedIn                                                    bool
+	generation                                                  uintptr
+	loginTarget, loginNotice                                    string
+	pendingLogin, automaticLogin                                *loginCredential
+	automatic, fallbackPending                                  bool
+	fallbackReason                                              string
+	enhanced, clipboard, linux, wayland, closed                 bool
+	stopBridge                                                  func()
+	rdpPort                                                     int
+	pipe, vmid, title, status                                   string
+	log                                                         io.Writer
+	layout                                                      displaySettings
+	display                                                     displayUpdate
+	displayError                                                string
 }
 
 var current *viewer
@@ -218,11 +222,6 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			return 0
 		}
 	case 0x10:
-		if v != nil && v.host != nil {
-			v.close()
-			user32.NewProc("PostQuitMessage").Call(0)
-			return 0
-		}
 		if v != nil {
 			v.close()
 		}
@@ -404,10 +403,22 @@ func Run(args []string, log io.Writer) error {
 		defer v.toolbar.painter.Close()
 		defer v.toolbar.cancel()
 	}
-	defer v.close()
+	defer func() {
+		v.close()
+		if v.host != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+			defer cancel()
+			v.host.Wait(ctx)
+		}
+	}()
 	v.setStatus(mode + " · 正在连接客户机…")
 	if v.wayland {
 		v.setStatus("正在连接 Linux 桌面 · 请完成凭据和证书确认，窗口将保持打开")
+	}
+	hook, _, hookErr := user32.NewProc("SetWinEventHook").Call(3, 3, 0, rendererForegroundCallback, 0, 0, 0)
+	v.foregroundHook = hook
+	if hook == 0 {
+		return fmt.Errorf("监听控制台前台切换失败: %w", hookErr)
 	}
 	if !v.rendererMode {
 		user32.NewProc("ShowWindow").Call(v.hwnd, 5)
@@ -614,7 +625,7 @@ func (v *viewer) resize() {
 		v.display.connected = connected
 		return
 	}
-	if connected && !v.linux && !v.loggedIn {
+	if connected && !v.loggedIn {
 		v.display.connected = true
 		v.setStatus("已连接 · 登录客户机后自动调整分辨率")
 		return
@@ -642,6 +653,10 @@ func (v *viewer) close() {
 	}
 	v.closed = true
 	v.generation++
+	if v.foregroundHook != 0 {
+		user32.NewProc("UnhookWinEvent").Call(v.foregroundHook)
+		v.foregroundHook = 0
+	}
 	if v.host != nil {
 		v.host.Close()
 		return

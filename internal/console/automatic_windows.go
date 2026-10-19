@@ -372,6 +372,8 @@ func (v *viewer) startRenderHost() {
 		command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 		return command
 	})
+	// GPU-PV guests can reject a second Windows display stack while the old one is still open.
+	v.host.Sequential = !v.linux
 	v.host.Begin(v.enhanced)
 }
 
@@ -403,8 +405,16 @@ func (v *viewer) switchRenderer(enhanced, automatic bool) {
 		v.fail(errors.New("无法启动控制台渲染进程"))
 		return
 	}
+	if v.host.Sequential {
+		v.renderWindow = 0
+		v.display.connected = false
+	}
 	v.revealHeader()
-	v.setStatus("正在连接候选画面 · 当前画面保持打开；点击基础可取消增强连接")
+	if v.host.Sequential {
+		v.setStatus("正在切换会话 · 请完成登录和证书确认；点击基础可返回基础画面")
+	} else {
+		v.setStatus("正在连接候选画面 · 当前画面保持打开；点击基础可取消增强连接")
+	}
 	v.resize()
 }
 
@@ -413,6 +423,7 @@ func (v *viewer) pollRenderer() {
 		return
 	}
 	previous := v.host.Active
+	connectingEnhanced := v.host.Candidate != nil && v.host.Candidate.Enhanced
 	changed, failed := v.host.Poll(func(p renderhost.Packet) bool {
 		var pid uint32
 		user32.NewProc("GetWindowThreadProcessId").Call(uintptr(p.Window), uintptr(unsafe.Pointer(&pid)))
@@ -446,7 +457,7 @@ func (v *viewer) pollRenderer() {
 		v.statusError = true
 		v.renderStatus()
 	}
-	if failed && renderhost.ShouldRestoreBasic(v.automatic, previous, v.host.Active) {
+	if failed && (renderhost.ShouldRestoreBasic(v.automatic, previous, v.host.Active) || v.host.Sequential && connectingEnhanced && v.host.Active == nil && v.host.Candidate == nil) {
 		v.display.connected = false
 		v.switchRenderer(false, true)
 	}
@@ -472,6 +483,7 @@ func (v *viewer) resizeRenderer() {
 	if v.closed || v.hwnd == 0 {
 		return
 	}
+	v.updateHostLayer()
 	var rect [4]int32
 	user32.NewProc("GetClientRect").Call(v.hwnd, uintptr(unsafe.Pointer(&rect)))
 	dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(v.hwnd)
@@ -514,6 +526,103 @@ func rendererPositionFlags(visible, foregroundIsHostOrRenderer bool) uintptr {
 	return flags | 0x40
 }
 
+// A popup cannot reliably rise above the foreground host after native move/size input.
+// Use topmost only while this exact host/image pair is foreground, then explicitly demote it.
+func rendererZOrder(visible, foregroundIsHostOrRenderer, wasTopmost bool) (uintptr, uintptr) {
+	flags := rendererPositionFlags(visible, foregroundIsHostOrRenderer)
+	if visible && foregroundIsHostOrRenderer {
+		return ^uintptr(0), flags &^ 0x4 // HWND_TOPMOST
+	}
+	if wasTopmost {
+		return ^uintptr(1), flags &^ 0x4 // HWND_NOTOPMOST; SWP_NOZORDER would prevent demotion.
+	}
+	return 0, flags | 0x4
+}
+
+var rendererForegroundCallback = syscall.NewCallback(func(_ uintptr, _ uint32, _ uintptr, _, _ int32, _, _ uint32) uintptr {
+	if v := current; v != nil && !v.closed {
+		if v.rendererMode && v.rendererLayoutKnown {
+			v.updateRendererLayer()
+		} else if v.host != nil {
+			v.resizeRenderer()
+		}
+	}
+	return 0
+})
+
+func windowAbove(upper, lower uintptr, next func(uintptr) uintptr) bool {
+	if upper == 0 || lower == 0 || upper == lower {
+		return false
+	}
+	for i, window := 0, next(upper); i < 512 && window != 0; i, window = i+1, next(window) {
+		if window == lower {
+			return true
+		}
+	}
+	return false
+}
+
+func nextWindow(window uintptr) uintptr {
+	handle, _, _ := user32.NewProc("GetWindow").Call(window, 2) // GW_HWNDNEXT
+	return handle
+}
+
+func lowerBehindForeground(window, foreground uintptr) {
+	if foreground == 0 || foreground == window {
+		return
+	}
+	style, _, _ := user32.NewProc("GetWindowLongPtrW").Call(foreground, ^uintptr(19))
+	if style&0x8 == 0 && windowAbove(window, foreground, nextWindow) {
+		user32.NewProc("SetWindowPos").Call(window, foreground, 0, 0, 0, 0, 0x13)
+	}
+}
+
+func (v *viewer) updateHostLayer() {
+	if v.host == nil || v.adjustingLayer || v.closed {
+		return
+	}
+	v.adjustingLayer = true
+	defer func() { v.adjustingLayer = false }()
+	foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
+	shown, _, _ := user32.NewProc("IsWindowVisible").Call(v.hwnd)
+	minimized, _, _ := user32.NewProc("IsIconic").Call(v.hwnd)
+	active := shown != 0 && minimized == 0 && (foreground == v.hwnd || v.renderWindow != 0 && foreground == v.renderWindow)
+	if active != v.hostTopmost {
+		order := ^uintptr(1)
+		if active {
+			order = ^uintptr(0)
+		}
+		if ok, _, _ := user32.NewProc("SetWindowPos").Call(v.hwnd, order, 0, 0, 0, 0, 0x13); ok != 0 {
+			v.hostTopmost = active
+		}
+	}
+	if !active && shown != 0 && minimized == 0 {
+		lowerBehindForeground(v.hwnd, foreground)
+	}
+	if v.renderWindow == 0 {
+		return
+	}
+	style, _, _ := user32.NewProc("GetWindowLongPtrW").Call(v.renderWindow, ^uintptr(19))
+	if (style&0x8 != 0) != v.hostTopmost {
+		return
+	}
+	if windowAbove(v.hwnd, v.renderWindow, nextWindow) {
+		// Lower only our own window, never raise an inactive console above another application.
+		user32.NewProc("SetWindowPos").Call(v.hwnd, v.renderWindow, 0, 0, 0, 0, 0x13)
+	}
+}
+
+func (v *viewer) updateRendererLayer() {
+	foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
+	order, flags := rendererZOrder(v.rendererLayoutVisible, foreground == v.parent || foreground == v.hwnd, v.rendererTopmost)
+	if ok, _, _ := user32.NewProc("SetWindowPos").Call(v.hwnd, order, 0, 0, 0, 0, flags|0x1|0x2); ok != 0 {
+		v.rendererTopmost = order == ^uintptr(0)
+	}
+	if v.rendererLayoutVisible && foreground != v.parent && foreground != v.hwnd {
+		lowerBehindForeground(v.hwnd, foreground)
+	}
+}
+
 func (v *viewer) rendererCommands() {
 	if v.renderer == nil {
 		return
@@ -521,12 +630,17 @@ func (v *viewer) rendererCommands() {
 	for command := v.renderer.Next(); command.Kind != ""; command = v.renderer.Next() {
 		switch command.Kind {
 		case "layout":
+			v.rendererLayoutKnown, v.rendererLayoutVisible = true, command.Visible
 			foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
-			flags := rendererPositionFlags(command.Visible, foreground == v.parent || foreground == v.hwnd)
-			ok, _, err := user32.NewProc("SetWindowPos").Call(v.hwnd, 0, uintptr(command.X), uintptr(command.Y), uintptr(command.Width), uintptr(command.Height), flags)
+			order, flags := rendererZOrder(command.Visible, foreground == v.parent || foreground == v.hwnd, v.rendererTopmost)
+			ok, _, err := user32.NewProc("SetWindowPos").Call(v.hwnd, order, uintptr(command.X), uintptr(command.Y), uintptr(command.Width), uintptr(command.Height), flags)
 			if ok == 0 {
 				v.connectionFailed(fmt.Errorf("同步渲染窗口位置失败: %w", err))
 				continue
+			}
+			v.rendererTopmost = order == ^uintptr(0)
+			if command.Visible && foreground != v.parent && foreground != v.hwnd {
+				lowerBehindForeground(v.hwnd, foreground)
 			}
 			v.resize()
 			if !v.reportedLayout && !v.reportedFailure && v.reportedConnected && command.Visible && command.Width >= 200 && command.Height >= 200 && v.layout.width == command.Width && v.layout.height == command.Height {
