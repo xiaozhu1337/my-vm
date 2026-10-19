@@ -90,6 +90,11 @@ func (v *viewer) sessionEvent(id int32) {
 	case 3, 33:
 		v.loggedIn = true
 		v.display = displayUpdate{}
+		if id == 3 && v.wayland {
+			if err := v.saveLogin(writeLogin); err != nil {
+				v.fail(err)
+			}
+		}
 	}
 }
 
@@ -104,7 +109,7 @@ func (v *viewer) disconnected(reason int32) {
 		description = value.ToString()
 		_ = value.Clear()
 	}
-	v.fail(fmt.Errorf("增强会话已断开（原因 %d，扩展 %d）: %s 若使用 GNOME，请先在基础控制台登录并解锁桌面，再重新连接。", reason, extended, description))
+	v.fail(fmt.Errorf("增强会话已断开（原因 %d，扩展 %d）: %s 若使用 GNOME，请先在基础控制台登录并解锁桌面；密码变更时，从窗口左上角菜单选择“忘记 Linux 登录凭据”，再重新打开增强会话。", reason, extended, description))
 }
 
 func (v *viewer) initializeEvents() error {

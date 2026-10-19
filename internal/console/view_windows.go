@@ -31,6 +31,8 @@ type viewer struct {
 	eventPoint                                  *ole.IConnectionPoint
 	eventCookie                                 uint32
 	loggedIn                                    bool
+	loginTarget, loginNotice                    string
+	pendingLogin                                *loginCredential
 	enhanced, clipboard, linux, wayland, closed bool
 	rdpPort                                     int
 	pipe, vmid, title, status                   string
@@ -44,6 +46,9 @@ var current *viewer
 
 func (v *viewer) fail(err error) { fmt.Fprintln(v.log, err); v.setStatus(err.Error()) }
 func (v *viewer) setStatus(status string) {
+	if v.loginNotice != "" && strings.HasPrefix(status, "已连接") {
+		status += " · " + v.loginNotice
+	}
 	if status == v.status {
 		return
 	}
@@ -98,6 +103,11 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			user32.NewProc("SetWindowPos").Call(hwnd, 0, uintptr(rect[0]), uintptr(rect[1]), uintptr(rect[2]-rect[0]), uintptr(rect[3]-rect[1]), 0x14)
 		}
 		return 0
+	case 0x112:
+		if v != nil && v.wayland && wparam&0xfff0 == forgetLoginCommand {
+			v.forgetLogin()
+			return 0
+		}
 	case 0x10:
 		if v != nil {
 			v.close()
@@ -197,6 +207,9 @@ func Run(args []string, log io.Writer) error {
 		v.setStatus("正在连接 Linux 桌面 · 请完成凭据和证书确认，窗口将保持打开")
 	}
 	user32.NewProc("ShowWindow").Call(v.hwnd, 5)
+	if v.wayland {
+		v.addLoginMenu()
+	}
 	if err := v.initialize(); err != nil {
 		v.fail(err)
 	}
@@ -301,10 +314,13 @@ func (v *viewer) initialize() error {
 		return err
 	}
 	if v.wayland {
-		if err = call(v.nonScriptable, 63, 0xffff); err != nil {
+		if err = v.configureLogin(); err != nil {
 			return err
 		}
-		if err = call(v.nonScriptable, 47, 0xffff); err != nil {
+		if err = call(v.nonScriptable, 63, 0); err != nil {
+			return err
+		}
+		if err = call(v.nonScriptable, 47, 0); err != nil {
 			return err
 		}
 	}
@@ -388,6 +404,8 @@ func (v *viewer) close() {
 		return
 	}
 	v.closed = true
+	v.pendingLogin.clear()
+	v.pendingLogin = nil
 	user32.NewProc("KillTimer").Call(v.hwnd, 1)
 	v.closeEvents()
 	if v.client != nil {
