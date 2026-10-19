@@ -41,7 +41,7 @@ func installUser() error {
 	if err != nil {
 		return err
 	}
-	if err = windows.ShellExecute(0, windows.StringToUTF16Ptr("runas"), windows.StringToUTF16Ptr(target), windows.StringToUTF16Ptr("--prepare"), nil, 1); err != nil {
+	if err = elevatePrepare(target); err != nil {
 		return err
 	}
 	cmd := exec.Command(target)
@@ -65,7 +65,10 @@ func prepareSystem() error {
 		return err
 	}
 	defer services.Disconnect()
-	return startService(services, "WebClient")
+	if err = startService(services, "WebClient"); err != nil {
+		return err
+	}
+	return prepareRemoteDesktop(services)
 }
 func startService(manager *mgr.Mgr, name string) error {
 	service, err := manager.OpenService(name)

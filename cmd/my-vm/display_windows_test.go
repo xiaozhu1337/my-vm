@@ -31,7 +31,7 @@ func TestViewGuestDesktopMode(t *testing.T) {
 		t.Fatal("legacy Linux desktop changed")
 	}
 	click(t, tt, "X11 / xrdp")
-	click(t, tt, "Wayland / GNOME Remote Desktop")
+	click(t, tt, "Wayland / GNOME · KDE")
 	if a.draft.LinuxDesktop != "wayland" || a.config.Machines[0].LinuxDesktop != "" {
 		t.Fatal("desktop choice did not stay in draft")
 	}

@@ -16,5 +16,5 @@ func dialHost(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSocketConn(connection), nil
+	return SocketConnection(connection), nil
 }

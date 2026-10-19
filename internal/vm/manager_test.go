@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,6 +48,19 @@ func TestVHDXSnapshots(t *testing.T) {
 	if err = os.WriteFile(disk, []byte("changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	err = manager.SnapshotContext(ctx, machine, "-a", "baseline", func(int64, int64) { cancel() })
+	cancel()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("restore did not cancel", err)
+	}
+	unchanged, err := os.ReadFile(disk)
+	if err != nil || string(unchanged) != "changed" {
+		t.Fatal("canceled restore replaced current disk", err)
+	}
+	if _, err = os.Stat(disk + ".restore"); !os.IsNotExist(err) {
+		t.Fatal("restore temporary file leaked", err)
+	}
 	if err = manager.Snapshot("", machine, "-a", "baseline", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +78,26 @@ func TestVHDXSnapshots(t *testing.T) {
 		t.Fatal("missing snapshot accepted")
 	}
 }
+func TestSnapshotCancelWhileWaitingForOperation(t *testing.T) {
+	manager := NewManager(t.TempDir(), io.Discard)
+	machine := NewMachine()
+	lock := manager.operation(machine.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() { done <- manager.SnapshotContext(ctx, machine, "-c", "baseline", nil) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("canceled snapshot remained blocked on operation lock")
+	}
+}
+
 func TestSnapshotRejectsExternalWriter(t *testing.T) {
 	root := t.TempDir()
 	source, target := filepath.Join(root, "disk.vhdx"), filepath.Join(root, "copy.vhdx")

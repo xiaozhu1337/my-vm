@@ -7,8 +7,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"my-vm/internal/vm"
-	"os"
-	"path/filepath"
 	"slices"
 )
 
@@ -60,15 +58,11 @@ func (a *application) shareEditor(c *ui.Context) {
 		}
 		muted(c, "共享名称使用英文字母开头，可包含字母、数字、下划线和连字符。Windows 自动分配空闲盘符；Linux 在文件管理器中显示共享目录。")
 		if button(c, "挂载客户机工具光盘", true) {
-			executable, err := os.Executable()
-			if err == nil {
-				target := filepath.Join(filepath.Dir(executable), "my-vm-guest-tools.iso")
-				if _, err = os.Stat(target); err == nil {
-					a.draft.DriverISO = target
-				}
-			}
+			target, err := enhancementDisc()
 			if err != nil {
-				a.report(fmt.Errorf("客户机工具光盘不可用，请先运行构建脚本: %w", err))
+				a.report(err)
+			} else {
+				a.draft.DriverISO = target
 			}
 		}
 		if a.draft.DriverISO != "" {

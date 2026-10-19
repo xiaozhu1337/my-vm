@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Keep GNOME's authenticated RDP stream on the VM-specific Hyper-V socket.
+// Keep the desktop's authenticated RDP stream on the VM-specific Hyper-V socket.
 func runDesktop(ctx context.Context, log io.Writer) {
 	if os.Getenv("XDG_SESSION_TYPE") != "wayland" {
 		return
@@ -84,6 +84,13 @@ func serveDesktop(ctx context.Context, log io.Writer) error {
 }
 
 func desktopAddress(ctx context.Context) (string, error) {
+	kind, err := waylandDesktop(os.Getenv("XDG_CURRENT_DESKTOP"))
+	if err != nil {
+		return "", err
+	}
+	if kind == "kde" {
+		return kdeAddress(ctx)
+	}
 	// GNOME publishes the negotiated listener port on the desktop user's bus.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

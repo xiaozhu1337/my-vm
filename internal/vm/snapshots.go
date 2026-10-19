@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -49,9 +50,24 @@ func (m *Manager) snapshots(machine Machine) ([]Snapshot, error) {
 
 // A full offline copy keeps the format independent of VM registration and firmware.
 func (m *Manager) Snapshot(_ string, machine Machine, action, name string, progress func(int64, int64)) error {
+	return m.SnapshotContext(context.Background(), machine, action, name, progress)
+}
+
+func (m *Manager) SnapshotContext(ctx context.Context, machine Machine, action, name string, progress func(int64, int64)) error {
 	lock := m.operation(machine.ID)
-	lock.Lock()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for !lock.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 	defer lock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !validSnapshot.MatchString(name) {
 		return errors.New("快照名称需为 1 到 64 个英文字母、数字、下划线或连字符，并以英文字母开头")
 	}
@@ -82,7 +98,7 @@ func (m *Manager) Snapshot(_ string, machine Machine, action, name string, progr
 		if err = os.Mkdir(folder, 0700); err != nil {
 			return err
 		}
-		if err = copyExclusive(disk, snapshot, progress); err != nil {
+		if err = copyExclusiveContext(ctx, disk, snapshot, progress); err != nil {
 			_ = os.Remove(folder)
 			return err
 		}
@@ -93,7 +109,11 @@ func (m *Manager) Snapshot(_ string, machine Machine, action, name string, progr
 			return errors.New("快照不存在")
 		}
 		pending := disk + ".restore"
-		if err = copyExclusive(snapshot, pending, progress); err != nil {
+		if err = copyExclusiveContext(ctx, snapshot, pending, progress); err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			_ = os.Remove(pending)
 			return err
 		}
 		if err = os.Rename(pending, disk); err != nil {

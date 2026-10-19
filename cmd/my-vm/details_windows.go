@@ -81,6 +81,13 @@ func (a *application) details(c *ui.Context) {
 				iso = "未挂载 / 从硬盘启动"
 			}
 			infoRow(c, "安装光盘", iso)
+			if button(c, "安装增强能力", m.Backend == "hcs" && state != "已暂停" && !a.diskBusy(m.ID)) {
+				a.installEnhancements(m)
+			}
+			if m.DriverISO != "" {
+				infoRow(c, "增强光盘", m.DriverISO)
+			}
+			muted(c, "插入离线增强盘后，在客户机桌面运行盘内安装程序；Windows、GNOME 和 KDE 自动配置各自服务。")
 			infoRow(c, "显示设备", "Hyper-V 基础控制台 / RDP 增强会话")
 			for _, s := range m.Shares {
 				mode := "只读"

@@ -132,7 +132,7 @@ func Save(path string, cfg Config) error {
 	}
 	comments := map[string]string{
 		"guest_os":       "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
-		"linux_desktop":  "Linux 增强会话：wayland 使用 GNOME Remote Desktop，x11 使用 xrdp；Ubuntu 26 默认 wayland，旧 linux 默认 x11。",
+		"linux_desktop":  "Linux 增强会话：wayland 使用 GNOME Remote Desktop 或 KDE KRdp，x11 使用 xrdp；Ubuntu 26 默认 wayland，旧 linux 默认 x11。",
 		"dynamic_memory": "允许 HCS 按需分配内存及运行中修改内存；实际回收能力取决于客户机集成驱动。",
 		"gpu_shared":     "启用 Hyper-V GPU 分区共享；需要兼容主机和客户机驱动，不保证显卡支持。",
 		"backend":        "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",

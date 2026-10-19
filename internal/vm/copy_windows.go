@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,14 +18,33 @@ import (
 var copyFileEx = windows.NewLazySystemDLL("kernel32.dll").NewProc("CopyFileExW")
 var copyCallbacks sync.Map
 var copySequence atomic.Uint64
+
+type copyProgress struct {
+	ctx      context.Context
+	progress func(int64, int64)
+}
+
 var copyCallback = syscall.NewCallback(func(total, transferred, streamSize, streamTransferred int64, stream, reason uint32, source, target, data uintptr) uintptr {
-	if progress, ok := copyCallbacks.Load(data); ok {
-		progress.(func(int64, int64))(transferred, total)
+	if value, ok := copyCallbacks.Load(data); ok {
+		state := value.(copyProgress)
+		if state.progress != nil {
+			state.progress(transferred, total)
+		}
+		if state.ctx.Err() != nil {
+			return 1
+		}
 	}
 	return 0
 })
 
 func copyExclusive(source, target string, progress func(int64, int64)) error {
+	return copyExclusiveContext(context.Background(), source, target, progress)
+}
+
+func copyExclusiveContext(ctx context.Context, source, target string, progress func(int64, int64)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path, err := windows.UTF16PtrFromString(source)
 	if err != nil {
 		return err
@@ -56,15 +76,14 @@ func copyExclusive(source, target string, progress func(int64, int64)) error {
 	if err != nil {
 		return err
 	}
-	var callback, context uintptr
-	if progress != nil {
-		context = uintptr(copySequence.Add(1))
-		copyCallbacks.Store(context, progress)
-		defer copyCallbacks.Delete(context)
-		callback = copyCallback
-	}
+	data := uintptr(copySequence.Add(1))
+	copyCallbacks.Store(data, copyProgress{ctx: ctx, progress: progress})
+	defer copyCallbacks.Delete(data)
 	// The native copier handles sparse files and uses the OS's optimized I/O path.
-	ok, _, copyErr := copyFileEx.Call(uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(destination)), callback, context, 0, 0)
+	ok, _, copyErr := copyFileEx.Call(uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(destination)), copyCallback, data, 0, 0)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if ok == 0 {
 		return fmt.Errorf("复制磁盘失败（原文件保留）: %w", copyErr)
 	}
@@ -77,6 +96,9 @@ func copyExclusive(source, target string, progress func(int64, int64)) error {
 		err = closeErr
 	}
 	if err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
 		return err
 	}
 	final, err := windows.UTF16PtrFromString(target)

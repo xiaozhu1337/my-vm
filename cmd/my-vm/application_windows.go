@@ -28,6 +28,7 @@ type application struct {
 	selected, page, query, message, qemuDir string
 	busy, messageError                      bool
 	diskJob                                 *diskJob
+	externalID                              string
 	diskDone                                func()
 	cloneSource                             *vm.Machine
 	listPage, filter, detailTab             int

@@ -16,7 +16,7 @@ type diskJob struct {
 }
 
 func (a *application) diskBusy(id string) bool {
-	return a.diskJob != nil && (a.diskJob.machineID == id || a.diskJob.targetID == id)
+	return a.externalID == id && id != "" || a.diskJob != nil && (a.diskJob.machineID == id || a.diskJob.targetID == id)
 }
 
 func (a *application) flushDisk() {

@@ -23,7 +23,7 @@ func TestSocketReadCancellationPreservesConnection(t *testing.T) {
 	native, peer := net.Pipe()
 	defer peer.Close()
 	counter := &deadlineCounter{Conn: native}
-	connection := newSocketConn(counter)
+	connection := SocketConnection(counter)
 	defer connection.Close()
 	if err := connection.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
 		t.Fatal(err)

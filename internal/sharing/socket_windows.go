@@ -17,7 +17,7 @@ func (l socketListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSocketConn(connection), nil
+	return SocketConnection(connection), nil
 }
 
 type socketConn struct {
@@ -28,7 +28,7 @@ type socketConn struct {
 	closeError   error
 }
 
-func newSocketConn(connection net.Conn) *socketConn {
+func SocketConnection(connection net.Conn) *socketConn {
 	reader, feed := net.Pipe()
 	result := &socketConn{Conn: connection, reader: reader, feed: feed}
 	// HTTP cancels read-ahead using deadlines; CancelIoEx on Hvsock also lost queued response bytes.

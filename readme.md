@@ -14,10 +14,12 @@ Windows 原生虚拟机管理器。管理界面使用 [MyGo](https://github.com/
 - 关机后复制已安装的 Windows/Linux，独立虚拟机和磁盘标识，默认断网并清除主机目录映射。
 - Windows 10、Windows 11、Ubuntu 26 及其他 Windows/Linux 系统配置；已有清单保持兼容。
 - 基础控制台用于固件和安装；增强会话提供窗口分辨率调整和剪贴板。
-- Linux 支持 GNOME/Wayland 当前桌面共享，也保留 X11/xrdp；窗口画面自动缩放，分辨率调整由客户机服务决定。
+- Linux 支持 GNOME 和 KDE Plasma 的 Wayland 当前桌面共享，也保留 X11/xrdp；窗口画面自动缩放，客户机分辨率调整与剪贴板格式由原生服务决定。
+- 离线增强 ISO 内置 Ubuntu/Kubuntu 26.04、26.10 amd64 的依赖、证书与服务配置；详情页“安装增强能力”支持运行中插入光盘。
 - 增强会话的文本、图片、文件复制粘贴能力取决于客户机服务；不会同时重定向宿主整盘。
 - 选择主机文件夹映射，默认只读，可单独允许写入；Windows 自动分配空闲盘符，Linux 在文件管理器中挂载。
-- 内存按需分配与运行中热调整；GPU 分区共享开关。
+- 内存按需分配与运行中热调整；与 NanaBox 同路径的 HCS GPU-PV 共享开关。
+- 独立命令行工具管理启停、快照、客户机命令执行和单文件双向复制。
 - 关机状态的完整 VHDX 磁盘快照，创建、恢复、删除及分页查看；复制和快照显示后台进度，可继续管理其他虚拟机。
 - YAML 配置及异步文件日志。
 
@@ -37,20 +39,25 @@ python -X utf8 "scripts/build.py"
 
 ```text
 dist\my-vm.exe
+dist\my-vm-cli.exe
 dist\my-vm-guest-tools.iso
 ```
 
-不再需要安装 QEMU 或下载 virtio 驱动。工具 ISO 包含 Windows 和 Linux x64 客户机程序。重新构建前关闭正在使用旧 EXE/工具光盘的程序和虚拟机。构建脚本使用 Go 工具 `go-winres` 生成 EXE 图标资源；图标源文件和无第三方 Python 依赖的生成脚本随项目保存，管理器与控制台窗口也使用同一图标。
+不再需要安装 QEMU 或下载 virtio 驱动。工具 ISO 包含双平台客户机程序和完整离线依赖。首次构建需联网收集 Ubuntu 软件包，使用 WSL 中的 Docker 解析闭合依赖；软件包和官方镜像由构建脚本通过代理下载，客户机安装只使用光盘内仓库。后续构建校验并复用 `dist\guest-payload` 缓存；不向客户机回退到联网安装。GPU-PV 载荷还需当前已验证宿主的匹配驱动文件，细节见 GPU 文档。
+
+重新构建前关闭正在使用旧 EXE/工具光盘的程序和虚拟机。构建脚本使用 Go 工具 `go-winres` 生成 EXE 图标资源；图标源文件和无第三方 Python 依赖的生成脚本随项目保存，管理器与控制台窗口也使用同一图标。
 
 ## 使用
 
 1. 退出仍在运行的旧版本，以管理员身份打开 `dist\my-vm.exe`，新建虚拟机，选择客户机类型和安装 ISO。
 2. 设置 CPU、内存、磁盘及网络，创建并启动。Windows 安装光盘出现按键启动提示时及时按键；错过后可重启虚拟机。
 3. 完成系统安装后关机，卸载安装 ISO。HCS 使用 Hyper-V 自带的存储、网络和显示设备。
-4. 需要共享目录时，在关机状态添加主机文件夹并选择只读/可写，点击“挂载客户机工具光盘”，保存并启动，在客户机安装工具。
-5. 需要高清桌面和剪贴板时，准备客户机的增强会话服务，再点击“增强会话”。基础控制台仍可随时用于安装及故障恢复。
+4. 点击详情页“安装增强能力”插入增强盘，Windows 在光盘内双击 `install.exe`；Ubuntu/Kubuntu 在已登录的 GNOME/KDE Wayland 桌面运行光盘内 `install.py`。安装器完成离线依赖、远程桌面证书与服务、共享目录代理和用户自启动配置。
+5. 需要主机文件夹时，在关机编辑页添加目录并选择只读/可写。安装后点击“增强会话”；基础控制台仍可用于安装及故障恢复。
 
-完整客户机准备步骤见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland；需要先在客户机登录 GNOME，启用“桌面共享”和远程控制，并安装新版客户机工具。连接时在原生 RDP 窗口输入 GNOME 远程桌面的凭据，密码不写入清单。旧的 `guest_os: linux` 继续使用 X11/xrdp，可在编辑页切换；细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
+完整操作见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland；GNOME 安装时设置远程桌面专用凭据，KDE 使用当前 Linux 账户密码。连接时通过原生 RDP 窗口认证，密码不写入清单。旧的 `guest_os: linux` 继续使用 X11/xrdp，可在编辑页切换；细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
+
+命令行示例见 [command-line.md](docs/command-line.md)。Windows 10、Ubuntu 26 自动安装的可行方案及交付前条件见 [automatic-installation.md](docs/automatic-installation.md)，本轮尚未提供无人值守安装复选框。
 
 GPU 的实际通过环境及可复现步骤见 [linux-gpu.md](docs/linux-gpu.md)，验证范围见 [validation.md](docs/validation.md)。
 
@@ -60,13 +67,13 @@ GPU 的实际通过环境及可复现步骤见 [linux-gpu.md](docs/linux-gpu.md)
 
 共享目录使用绑定到该虚拟机 RuntimeId 的 Hyper-V Socket 私有通道，宿主不开放 TCP 文件共享端口。客户机工具仅在本机 `127.0.0.1:18389` 提供 WebDAV 适配；不会转发任意主机网络地址。只读限制在宿主端执行，可写目录的操作会直接修改主机文件。
 
-Wayland 控制台通过临时的宿主 `127.0.0.1` 端口，将带 TLS/NLA 认证的 RDP 流量送入该 VM 的 `vsock:3390`，再由工具连接客户机本机 GNOME 远程桌面端口；与文件夹映射共用一套工具。关闭控制台即关闭宿主转发器。GNOME 自身的 RDP 监听和防火墙策略由客户机管理。
+Wayland 控制台通过临时的宿主 `127.0.0.1` 端口，将带 TLS/NLA 认证的 RDP 流量送入该 VM 的 `vsock:3390`，再由工具连接客户机本机 GNOME 或 KDE 远程桌面端口；与文件夹映射共用一套工具。关闭控制台即关闭宿主转发器。GNOME 自身的 RDP 监听和防火墙策略由客户机管理。
 
 ## 内存、GPU 与快照的边界
 
 “内存按需分配”对应 HCS `AllowOvercommit`，同时允许在线修改目标内存。它不是自动按最小/最大值调整的控制器，实际增减及回收受客户机 Hyper-V 内存驱动影响。运行中的调整不修改下次启动的配置值。
 
-GPU 开关请求 HCS 分配 GPU 分区，失败会报错。客户机驱动必须另行准备；原版 Ubuntu 不自带所需的 `dxgkrnl`。已在本文档所列 Ubuntu 环境验证真实 CUDA 运算，但不据此保证所有显卡、内核、Windows GPU 驱动或桌面 3D 应用兼容。
+GPU 开关沿用 NanaBox 同类的 HCS GPU-PV 路径，启动后更新 `VirtualMachine/ComputeTopology/Gpu`，使用 `AssignmentMode: Default`、`AllowVendorExtension: true` 分配默认 GPU；NanaBox 的 `Mirror` 则投射所有 GPU。本项目不使用 `List` 固定分区 ID，也不依赖 PowerShell 配置 GPU-P 或 DDA。失败会报错。原版 Ubuntu 不自带所需 `dxgkrnl`，增强盘仅对已验证的内核和宿主驱动组合自动准备，并运行真实 CUDA 自检；不满足条件时明确跳过 GPU，其余增强仍可安装。兼容范围见 [linux-gpu.md](docs/linux-gpu.md)。
 
 快照是关机后的完整磁盘文件副本，每台最多 16 个；不含 RAM、UEFI 变量或运行状态，也不是 Hyper-V 完整检查点。创建和恢复需要额外磁盘空间，恢复前会确认。系统安装或固件设置发生变化时，应保留相应安装记录和配置。
 
@@ -99,7 +106,7 @@ mise exec go@1.27.2 -- go vet ./...
 
 设置环境变量 `MY_VM_INTEGRATION=1` 后运行 `go test ./internal/vm -run TestHCSLifecycle -v -count=1`，会创建独立临时 VHDX，实际测试 HCS 启停、暂停、继续、共享通道注册及运行中快照拦截；需管理员权限和 Hyper-V。
 
-MyGo `ui.NewTester` 在内存中验证导航、搜索分页、表单、禁用状态、主题和最小布局；原生文件/确认对话框、RDP、GPU 及真实文件粘贴另以实际系统验证。当前不包含 macOS/Linux 主机版本、旧 qcow2 自动转换、内存快照、自动 OS 安装、自动 GPU 驱动安装或宿主交换机创建。
+MyGo `ui.NewTester` 在内存中验证导航、搜索分页、表单、禁用状态、主题和最小布局；原生文件/确认对话框、RDP、GPU 及真实文件粘贴另以实际系统验证。当前不包含 macOS/Linux 主机版本、旧 qcow2 自动转换、内存快照、自动 OS 安装、任意硬件与内核的 GPU 驱动安装或宿主交换机创建。
 
 日常系统回归复用 `%APPDATA%\\my-vm\\library.yaml` 中已安装的 Windows、Ubuntu；完成后关机并保留安装，不删除重装。设置环境变量 `MY_VM_REUSE=1` 后运行 `go test ./internal/vm -run TestInstalledVMClones -v -count=1`，会读取现有的离线安装，在临时目录创建完整副本，验证磁盘新标识、固件状态、进度和原盘元数据未变；不修改原清单，不启动或删除原机。测试临时目录须与原盘位于同一卷，并预留至少最大单台 VHDX 大小的可用空间；执行前先正常关闭客户机。若同时设置 `MY_VM_INTEGRATION=1`，还会对临时副本验证 HCS 启动、暂停和继续，随后停止临时副本；原机始终不启动。普通单元测试仍使用小型临时 VHDX，不涉及系统重装。
 

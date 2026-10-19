@@ -99,11 +99,11 @@ func (a *application) editor(c *ui.Context) {
 		card(c, "显示与共享", "基础控制台用于固件和系统安装；增强会话使用本地 RDP 通道提供高清桌面与剪贴板。", func() {
 			if a.draft.IsLinux() {
 				desktop := a.draft.DesktopMode()
-				choice(c, "Linux 桌面会话", &desktop, []string{"wayland", "x11"}, map[string]string{"wayland": "Wayland / GNOME Remote Desktop", "x11": "X11 / xrdp"})
+				choice(c, "Linux 桌面会话", &desktop, []string{"wayland", "x11"}, map[string]string{"wayland": "Wayland / GNOME · KDE", "x11": "X11 / xrdp"})
 				if desktop != a.draft.DesktopMode() {
 					a.draft.LinuxDesktop = desktop
 				}
-				muted(c, "Wayland 使用 GNOME 原生远程桌面，可共享当前桌面、传递剪贴板并缩放画面；需先在客户机配置服务。")
+				muted(c, "Wayland 使用 GNOME Remote Desktop 或 KDE KRdp，共享当前桌面、剪贴板并缩放画面；客户机挂载增强盘后运行安装器。")
 			} else {
 				muted(c, "Windows 10/11 已包含 Hyper-V 显示、存储与网络驱动。增强会话需要客户机启用远程桌面服务。")
 			}
