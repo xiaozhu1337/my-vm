@@ -23,7 +23,6 @@ func (a *application) shareEditor(c *ui.Context) {
 						a.busy = true
 						paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.window, Title: "选择共享文件夹", Directory: true})
 						a.busy = false
-						a.flushDisk()
 						if err != nil {
 							a.report(err)
 						} else if len(paths) > 0 {
@@ -58,12 +57,17 @@ func (a *application) shareEditor(c *ui.Context) {
 		}
 		muted(c, "共享名称使用英文字母开头，可包含字母、数字、下划线和连字符。Windows 自动分配空闲盘符；Linux 在文件管理器中显示共享目录。")
 		if button(c, "挂载客户机工具光盘", true) {
-			target, err := enhancementDisc()
-			if err != nil {
-				a.report(err)
-			} else {
-				a.draft.DriverISO = target
-			}
+			id, version := a.draft.ID, a.editVersion
+			var target string
+			a.run(id, "读取增强光盘", func() error {
+				var err error
+				target, err = enhancementDisc()
+				return err
+			}, func() {
+				if a.page == "edit" && a.draft.ID == id && a.editVersion == version {
+					a.draft.DriverISO = target
+				}
+			})
 		}
 		if a.draft.DriverISO != "" {
 			infoRow(c, "工具光盘", a.draft.DriverISO)

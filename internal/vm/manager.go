@@ -117,21 +117,16 @@ func (m *Manager) Start(_ string, machine Machine) error {
 		if err != nil {
 			return err
 		}
-		selected := machine.SwitchID
-		if selected == "" {
-			for _, n := range networks {
-				if n.Type == "ICS" {
-					selected = n.ID
-					break
-				}
-			}
-		}
-		if selected == "" {
-			return errors.New("未找到 Hyper-V 默认 NAT 交换机；请在设置中查看交换机或指定现有外部交换机")
-		}
-		endpoint, err = hcs.CreateEndpoint(selected, id)
+		selected, err := selectNetwork(networks, machine.SwitchID)
 		if err != nil {
 			return err
+		}
+		endpoint, err = hcs.CreateEndpoint(selected.ID, id)
+		if err != nil {
+			return err
+		}
+		if m.Log != nil {
+			fmt.Fprintf(m.Log, "VM %s network: %s (%s), endpoint: %s\n", machine.ID, selected.Name, selected.ID, endpoint.String())
 		}
 	}
 	endpointID := ""

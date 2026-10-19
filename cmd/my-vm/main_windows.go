@@ -100,7 +100,7 @@ func main() {
 			a.report(err)
 		}
 		a.window.OnClose(func(e *mygo.CloseEvent) {
-			if a.busy || a.diskJob != nil || a.manager.Active() || controller != nil && controller.Active() {
+			if a.busy || len(a.operations) > 0 || len(a.diskJobs) > 0 || a.manager.Active() || controller != nil && controller.Active() {
 				e.PreventDefault()
 				a.messageError = false
 				a.message = "请等待当前操作完成，并关闭所有虚拟机后再退出。"

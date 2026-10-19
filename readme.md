@@ -55,6 +55,8 @@ dist\my-vm-guest-tools.iso
 4. 点击详情页“安装增强能力”插入增强盘，Windows 在光盘内双击 `install.exe`；Ubuntu/Kubuntu 在已登录的 GNOME/KDE Wayland 桌面运行光盘内 `install.py`。安装器完成离线依赖、远程桌面证书与服务、共享目录代理和用户自启动配置。
 5. 需要主机文件夹时，在关机编辑页添加目录并选择只读/可写。安装后点击“增强会话”；基础控制台仍可用于安装及故障恢复。
 
+NAT 自动选网使用 Windows 保留标识对应的 `Default Switch`，不会把 WSL 的其他 ICS 网络当作默认交换机。Default Switch 提供 DHCP；找不到时明确报错。显式指定交换机时由该网络提供 DHCP 或客户机配置静态地址。若旧版本已接入 WSL 交换机，请正常关闭客户机并用新版重新启动，让网卡重新接入正确网络；无需重装系统。
+
 完整操作见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland；GNOME 安装时设置远程桌面专用凭据，KDE 使用当前 Linux 账户密码。连接时通过原生 RDP 窗口认证，密码不写入清单。旧的 `guest_os: linux` 继续使用 X11/xrdp，可在编辑页切换；细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
 
 命令行示例见 [command-line.md](docs/command-line.md)。Windows 10、Ubuntu 26 自动安装的可行方案及交付前条件见 [automatic-installation.md](docs/automatic-installation.md)，本轮尚未提供无人值守安装复选框。
@@ -73,11 +75,11 @@ Wayland 控制台通过临时的宿主 `127.0.0.1` 端口，将带 TLS/NLA 认�
 
 “内存按需分配”对应 HCS `AllowOvercommit`，同时允许在线修改目标内存。它不是自动按最小/最大值调整的控制器，实际增减及回收受客户机 Hyper-V 内存驱动影响。运行中的调整不修改下次启动的配置值。
 
-GPU 开关沿用 NanaBox 同类的 HCS GPU-PV 路径，启动后更新 `VirtualMachine/ComputeTopology/Gpu`，使用 `AssignmentMode: Default`、`AllowVendorExtension: true` 分配默认 GPU；NanaBox 的 `Mirror` 则投射所有 GPU。本项目不使用 `List` 固定分区 ID，也不依赖 PowerShell 配置 GPU-P 或 DDA。失败会报错。原版 Ubuntu 不自带所需 `dxgkrnl`，增强盘仅对已验证的内核和宿主驱动组合自动准备，并运行真实 CUDA 自检；不满足条件时明确跳过 GPU，其余增强仍可安装。兼容范围见 [linux-gpu.md](docs/linux-gpu.md)。
+GPU 开关默认关闭，必须为每台虚拟机单独启用；已有清单按自身的 `gpu_shared` 值运行。GPU 开关沿用 NanaBox 同类的 HCS GPU-PV 路径，启动后更新 `VirtualMachine/ComputeTopology/Gpu`，使用 `AssignmentMode: Default`、`AllowVendorExtension: true` 分配默认 GPU；NanaBox 的 `Mirror` 则投射所有 GPU。本项目不使用 `List` 固定分区 ID，也不依赖 PowerShell 配置 GPU-P 或 DDA。失败会报错。原版 Ubuntu 不自带所需 `dxgkrnl`，增强盘仅对已验证的内核和宿主驱动组合自动准备，并运行真实 CUDA 自检；不满足条件时明确跳过 GPU，其余增强仍可安装。兼容范围见 [linux-gpu.md](docs/linux-gpu.md)。
 
 快照是关机后的完整磁盘文件副本，每台最多 16 个；不含 RAM、UEFI 变量或运行状态，也不是 Hyper-V 完整检查点。创建和恢复需要额外磁盘空间，恢复前会确认。系统安装或固件设置发生变化时，应保留相应安装记录和配置。
 
-复制和快照创建、恢复都需要读写整个 VHDX 文件，耗时随实际文件大小和存储速度增加。界面显示已复制容量和百分比，操作在后台进行；同一台虚拟机在作业完成前不能启动或修改磁盘，其他虚拟机仍可查看、编辑和启停。每次允许一个大型磁盘作业，避免同时复制争抢磁盘。
+复制和快照创建、恢复都需要读写整个 VHDX 文件，耗时随实际文件大小和存储速度增加。界面显示已复制容量和百分比，操作在后台进行；同一台虚拟机在作业完成前不能启动或修改磁盘，其他虚拟机仍可查看、编辑和启停。启动、关机、暂停、控制台、内存调整、快照读取及增强光盘操作均在后台执行，只占用对应虚拟机；期间侧栏、设置和其他虚拟机仍可操作。不同虚拟机可同时执行磁盘作业；复制会共享主机磁盘带宽。配置落盘通过单一后台队列合并最新清单，避免并发保存相互覆盖。
 
 Windows WebClient 单文件上限约 4 GiB，工具会配置系统允许的最大值；如服务此前已启动，变更后可能需要重启客户机。为避免覆盖时丢失目标文件，服务拒绝覆盖式 COPY/MOVE、目录 COPY 和非空目录递归删除；普通文件 PUT 覆盖使用临时文件完整写入后再替换。不是完整 SMB 语义，也不适合作为数据库目录。
 

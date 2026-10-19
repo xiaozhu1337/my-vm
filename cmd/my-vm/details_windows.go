@@ -47,7 +47,7 @@ func (a *application) details(c *ui.Context) {
 			a.refreshSnapshots(m)
 		}
 		ui.Spacer(c)
-		if button(c, "复制虚拟机", off && a.diskJob == nil && m.Backend == "hcs") {
+		if button(c, "复制虚拟机", off && m.Backend == "hcs") {
 			a.beginClone(m)
 		}
 		if button(c, "编辑配置", off) {
@@ -110,7 +110,7 @@ func (a *application) details(c *ui.Context) {
 					ui.Row(c).Gap(12).Children(func() {
 						ui.Row(c).TextColor(c.Theme().Danger).Children(func() {
 							if button(c, "强制断电", state != "已关机" && !a.diskBusy(m.ID)) && a.confirm("强制断电", "关闭「"+m.Name+"」？", "未保存的数据可能丢失，建议优先使用正常关机。") {
-								a.run("强制断电", func() error { return a.manager.Control(m.ID, "kill") }, nil)
+								a.run(m.ID, "强制断电「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "kill") }, nil)
 							}
 						})
 						if button(c, "从列表移除", off) {
@@ -132,6 +132,9 @@ func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
 	if paused {
 		title, description = "虚拟机已暂停", "继续运行后，客户机才能响应操作与正常关机请求。"
 	}
+	if operation := a.operations[m.ID]; operation != "" {
+		title, description = operation+"…", "可继续切换或操作其他虚拟机。"
+	}
 	ui.Column(c).FillWidth().Gap(20).Padding(24).Radius(12).
 		Background(c.Theme().Surface.Mix(c.Theme().Accent, .06)).Border(1, c.Theme().Accent.Alpha(.18)).Children(func() {
 		ui.Column(c).FillWidth().Gap(7).Children(func() {
@@ -150,31 +153,31 @@ func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
 				case off:
 					dir := a.config.QEMUDir
 					a.resetSnapshots()
-					a.run("启动虚拟机", func() error {
+					a.run(m.ID, "启动虚拟机「"+m.Name+"」", func() error {
 						if err := a.manager.Start(dir, m); err != nil {
 							return err
 						}
 						return a.manager.ShowDisplay(m.ID)
 					}, nil)
 				case paused:
-					a.run("继续运行", func() error { return a.manager.Control(m.ID, "cont") }, nil)
+					a.run(m.ID, "继续运行「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "cont") }, nil)
 				default:
-					a.run("打开客户机画面", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
+					a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
 				}
 			}
 			if !off {
 				if button(c, "增强会话", !paused) {
-					a.run("打开增强会话", func() error { return a.manager.ShowDisplayMode(m.ID, true) }, nil)
+					a.run(m.ID, "打开增强会话「"+m.Name+"」", func() error { return a.manager.ShowDisplayMode(m.ID, true) }, nil)
 				}
 				if paused {
 					if button(c, "打开画面", true) {
-						a.run("打开客户机画面", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
+						a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
 					}
 				} else if button(c, "暂停", true) {
-					a.run("暂停虚拟机", func() error { return a.manager.Control(m.ID, "stop") }, nil)
+					a.run(m.ID, "暂停虚拟机「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "stop") }, nil)
 				}
 				if button(c, "正常关机", !paused) {
-					a.run("发送关机请求", func() error { return a.manager.Control(m.ID, "system_powerdown") }, func() {
+					a.run(m.ID, "发送关机请求「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "system_powerdown") }, func() {
 						a.message = "已发送关机请求，等待客户机退出；无响应时可在“更多操作”中强制断电。"
 					})
 				}

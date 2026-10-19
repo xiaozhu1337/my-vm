@@ -27,7 +27,12 @@ func TestSelectionPaginationAndReadOnlyState(t *testing.T) {
 		t.Fatal(err)
 	}
 	called, finished := 0, 0
-	server := &Server{manager: vm.NewManager(root, io.Discard), Allow: func(string, string) error { called++; return nil }, Changed: func() { finished++ }}
+	server := &Server{manager: vm.NewManager(root, io.Discard), Allow: func(string, string) error { called++; return nil }, Changed: func(id string) {
+		if id != first.ID {
+			t.Error("finished wrong machine", id)
+		}
+		finished++
+	}}
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest("GET", "/v1/action?action=list&offset=1&limit=1", nil))
 	if response.Code != 200 || !strings.Contains(response.Body.String(), second.ID) || strings.Contains(response.Body.String(), first.ID) {

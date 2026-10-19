@@ -17,9 +17,9 @@ func (a *application) settings(c *ui.Context) {
 			infoRow(c, "控制台", "基础控制台显示固件和安装过程；增强会话提供桌面分辨率与剪贴板重定向。")
 		})
 		card(c, "虚拟交换机", "NAT 使用系统 Default Switch；桥接需先在 Hyper-V 中创建外部交换机。", func() {
-			if button(c, "刷新交换机", true) {
+			if button(c, "刷新交换机", !a.diskBusy("host-networks")) {
 				var networks []hcs.Network
-				a.run("读取 Hyper-V 交换机", func() error { var err error; networks, err = hcs.Networks(); return err }, func() { a.networks = networks })
+				a.run("host-networks", "读取 Hyper-V 交换机", func() error { var err error; networks, err = hcs.Networks(); return err }, func() { a.networks = networks })
 			}
 			for _, n := range a.networks {
 				infoRow(c, n.Name, n.Type+" / "+n.ID)

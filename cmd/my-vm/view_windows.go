@@ -137,13 +137,13 @@ func (a *application) statusBar(c *ui.Context) {
 			message = "就绪"
 		} else if a.messageError {
 			color = c.Theme().Danger
-		} else if !a.busy {
+		} else if !a.busy && len(a.operations) == 0 {
 			color = c.Theme().Success
 		}
-		if a.diskJob != nil && !a.messageError {
-			message, color = a.diskJob.status(), c.Theme().TextMuted
+		if job := a.activeDiskJob(); job != nil && !a.messageError {
+			message, color = job.status(), c.Theme().TextMuted
 		}
-		if a.busy || a.diskJob != nil {
+		if a.busy || len(a.operations) > 0 || len(a.diskJobs) > 0 {
 			components.Spinner(c, components.SpinnerRing).Label("正在处理").Size(16, 16)
 		}
 		components.Text(c, strings.SplitN(message, "\n", 2)[0]).SingleLine().Grow(1).MinWidth(0).FontSize(12).TextColor(color)

@@ -16,23 +16,39 @@ type diskJob struct {
 }
 
 func (a *application) diskBusy(id string) bool {
-	return a.externalID == id && id != "" || a.diskJob != nil && (a.diskJob.machineID == id || a.diskJob.targetID == id)
+	if a.operations[id] != "" || a.externalJobs[id] {
+		return true
+	}
+	for _, job := range a.diskJobs {
+		if job.machineID == id || job.targetID == id {
+			return true
+		}
+	}
+	return false
 }
 
-func (a *application) flushDisk() {
-	if !a.busy && a.diskDone != nil {
-		finish := a.diskDone
-		a.diskDone = nil
-		finish()
+func (a *application) activeDiskJob() *diskJob {
+	var selected *diskJob
+	for _, job := range a.diskJobs {
+		if job.machineID == a.selected || job.targetID == a.selected {
+			return job
+		}
+		if selected == nil || job.machineID < selected.machineID {
+			selected = job
+		}
 	}
+	return selected
 }
 
 func (a *application) runDisk(label string, machine vm.Machine, targetID string, work func(func(int64, int64)) error, done func()) {
-	if a.busy || a.loadError != nil || a.diskJob != nil {
+	if a.busy || a.loadError != nil || a.diskBusy(machine.ID) || targetID != "" && a.diskBusy(targetID) {
 		return
 	}
 	job := &diskJob{machineID: machine.ID, targetID: targetID, name: machine.Name, label: label}
-	a.diskJob = job
+	if a.diskJobs == nil {
+		a.diskJobs = map[string]*diskJob{}
+	}
+	a.diskJobs[machine.ID] = job
 	a.messageError = false
 	a.message = label + "…"
 	go func() {
@@ -50,22 +66,19 @@ func (a *application) runDisk(label string, machine vm.Machine, targetID string,
 			})
 		})
 		mygo.RunOnMain(func() {
-			a.diskDone = func() {
-				a.diskJob = nil
-				if err != nil {
-					a.report(fmt.Errorf("%s「%s」: %w", label, machine.Name, err))
-				} else {
-					a.messageError = false
-					a.message = label + "「" + machine.Name + "」完成"
-					if done != nil {
-						done()
-					}
-				}
-				if a.window != nil {
-					a.window.Invalidate()
+			delete(a.diskJobs, machine.ID)
+			if err != nil {
+				a.report(fmt.Errorf("%s「%s」: %w", label, machine.Name, err))
+			} else {
+				a.messageError = false
+				a.message = label + "「" + machine.Name + "」完成"
+				if done != nil {
+					done()
 				}
 			}
-			a.flushDisk()
+			if a.window != nil {
+				a.window.Invalidate()
+			}
 		})
 	}()
 }

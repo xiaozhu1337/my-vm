@@ -82,7 +82,7 @@ func (a *application) editor(c *ui.Context) {
 			if button(c, gpuLabel, true) {
 				a.draft.GPUShared = !a.draft.GPUShared
 			}
-			muted(c, "GPU 分区共享需要兼容显卡和客户机驱动；原版 Ubuntu 不含所需的 dxgkrnl 驱动。启用失败将报告错误。")
+			muted(c, "GPU-PV 共享默认关闭，需要兼容显卡和客户机驱动；原版 Ubuntu 不含所需的 dxgkrnl 驱动。启用失败将报告错误。")
 			muted(c, "VHDX 磁盘按实际使用占用空间；已有磁盘暂不支持调整容量。")
 		})
 		card(c, "安装镜像", "安装系统时挂载 ISO；安装完成后关机，再卸载光盘。", func() {

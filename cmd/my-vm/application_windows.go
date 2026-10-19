@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -27,9 +26,11 @@ type application struct {
 	loadError                               error
 	selected, page, query, message, qemuDir string
 	busy, messageError                      bool
-	diskJob                                 *diskJob
-	externalID                              string
-	diskDone                                func()
+	operations                              map[string]string
+	configurationSaves                      []configurationSave
+	diskJobs                                map[string]*diskJob
+	externalJobs                            map[string]bool
+	editVersion                             int
 	cloneSource                             *vm.Machine
 	listPage, filter, detailTab             int
 	showAdvanced                            bool
@@ -45,32 +46,9 @@ type application struct {
 
 func (a *application) report(err error) {
 	a.message, a.messageError = err.Error(), true
-	_, _ = fmt.Fprintln(a.logger, err)
-}
-
-func (a *application) run(label string, work func() error, done func()) {
-	if a.busy || a.loadError != nil {
-		return
+	if a.logger != nil {
+		_, _ = fmt.Fprintln(a.logger, err)
 	}
-	a.busy = true
-	a.messageError = false
-	a.message = label + "…"
-	go func() {
-		err := work()
-		mygo.RunOnMain(func() {
-			a.busy = false
-			if err != nil {
-				a.report(err)
-			} else {
-				a.message = label + "完成"
-				if done != nil {
-					done()
-				}
-			}
-			a.flushDisk()
-			a.window.Invalidate()
-		})
-	}()
 }
 
 func (a *application) machine() (vm.Machine, bool) {
@@ -83,6 +61,7 @@ func (a *application) machine() (vm.Machine, bool) {
 }
 
 func (a *application) edit(m vm.Machine, creating bool) {
+	a.editVersion++
 	a.cloneSource = nil
 	if m.GuestOS == "" {
 		m.GuestOS = "windows"
@@ -123,33 +102,38 @@ func (a *application) saveDraft() {
 		a.saveClone(*a.cloneSource, m)
 		return
 	}
-	cfg := a.config
-	cfg.Machines = slices.Clone(cfg.Machines)
-	if a.creating {
-		cfg.Machines = append(cfg.Machines, m)
-	} else {
+	creating, version := a.creating, a.editVersion
+	dir := a.config.QEMUDir
+	a.runConfig(m.ID, "保存虚拟机「"+m.Name+"」", func() error {
+		if creating {
+			return a.manager.CreateDisk(dir, m)
+		}
+		return nil
+	}, func(cfg *vm.Config) error {
+		if creating {
+			cfg.Machines = append(cfg.Machines, m)
+			return nil
+		}
 		for i := range cfg.Machines {
 			if cfg.Machines[i].ID == m.ID {
 				cfg.Machines[i] = m
+				return nil
 			}
 		}
+		return fmt.Errorf("虚拟机已从配置中移除；磁盘保留在 %s", vm.DiskPath(a.root, m))
+	}, func() { a.finishEditing(m, version) })
+}
+
+func (a *application) finishEditing(machine vm.Machine, version int) {
+	if a.page == "edit" && a.draft.ID == machine.ID && a.editVersion == version {
+		if a.busy {
+			a.draft, a.savedDraft, a.creating = machine, machine, false
+			a.savedDraft.Shares = slices.Clone(machine.Shares)
+			return
+		}
+		a.selected, a.page, a.detailTab = machine.ID, "", 0
+		a.resetSnapshots()
 	}
-	creating := a.creating
-	dir := cfg.QEMUDir
-	a.run("保存虚拟机", func() error {
-		if creating {
-			if err := a.manager.CreateDisk(dir, m); err != nil {
-				return err
-			}
-		}
-		if err := vm.Save(filepath.Join(a.root, "library.yaml"), cfg); err != nil {
-			if creating {
-				return fmt.Errorf("配置保存失败，磁盘保留在 %s: %w", vm.DiskPath(a.root, m), err)
-			}
-			return err
-		}
-		return nil
-	}, func() { a.config = cfg; a.selected = m.ID; a.page = ""; a.detailTab = 0; a.resetSnapshots() })
 }
 
 func (a *application) hasUnsavedChanges() bool {
@@ -170,7 +154,6 @@ func (a *application) confirm(action, message, detail string) bool {
 	a.busy = true
 	result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.window, Type: mygo.MessageWarning, Title: action, Message: message, Detail: detail, Buttons: []string{"取消", action}, DefaultButton: 0, CancelButton: 0})
 	a.busy = false
-	a.flushDisk()
 	if err != nil {
 		a.report(err)
 		return false
@@ -189,13 +172,16 @@ func (a *application) remove(m vm.Machine) {
 	if !a.confirm("从列表移除", "从列表移除「"+m.Name+"」？", "磁盘和快照将保留在 "+vm.DiskPath(a.root, m)) {
 		return
 	}
-	cfg := a.config
-	cfg.Machines = slices.DeleteFunc(slices.Clone(cfg.Machines), func(item vm.Machine) bool { return item.ID == m.ID })
-	a.run("移除虚拟机", func() error { return vm.Save(filepath.Join(a.root, "library.yaml"), cfg) }, func() {
-		a.config = cfg
+	a.runConfig(m.ID, "移除虚拟机「"+m.Name+"」", func() error { return nil }, func(cfg *vm.Config) error {
+		cfg.Machines = slices.DeleteFunc(cfg.Machines, func(item vm.Machine) bool { return item.ID == m.ID })
+		return nil
+	}, func() {
+		if a.selected != m.ID {
+			return
+		}
 		a.selected = ""
-		if len(cfg.Machines) > 0 {
-			a.selected = cfg.Machines[0].ID
+		if len(a.config.Machines) > 0 {
+			a.selected = a.config.Machines[0].ID
 		}
 		a.detailTab = 0
 		a.resetSnapshots()
@@ -226,13 +212,13 @@ func (a *application) refreshSnapshots(m vm.Machine) {
 	request := a.snapshotRequest
 	var snapshots []vm.Snapshot
 	dir := a.config.QEMUDir
-	a.run("读取快照", func() error { var err error; snapshots, err = a.manager.Snapshots(dir, m); return err }, func() {
+	a.run(m.ID, "读取快照「"+m.Name+"」", func() error { var err error; snapshots, err = a.manager.Snapshots(dir, m); return err }, func() {
 		a.acceptSnapshots(m.ID, request, snapshots)
 	})
 }
 
 func (a *application) snapshot(m vm.Machine, action, name string) {
-	if a.diskJob != nil {
+	if a.diskBusy(m.ID) {
 		return
 	}
 	label := map[string]string{"-c": "创建快照", "-a": "恢复快照", "-d": "删除快照"}[action]
@@ -260,7 +246,6 @@ func (a *application) pickISO(title string, target *string) {
 	a.busy = true
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.window, Title: title, Filters: []mygo.FileFilter{{Name: "ISO 镜像", Extensions: []string{"iso"}}}})
 	a.busy = false
-	a.flushDisk()
 	if err != nil {
 		a.report(err)
 	} else if len(paths) > 0 {

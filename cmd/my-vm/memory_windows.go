@@ -19,9 +19,9 @@ func (a *application) memoryCard(c *ui.Context, m vm.Machine, state string) {
 	card(c, "运行内存", "立即调整当前启动的内存，关机后恢复配置值；客户机需要支持内存集成。", func() {
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
 			components.NumberInput(c, &a.runtimeMemory, 256, 1048576, 256).Label("运行内存 MiB").Width(220)
-			if button(c, "应用内存", state == "运行中") {
+			if button(c, "应用内存", state == "运行中" && !a.diskBusy(m.ID)) {
 				size := int(a.runtimeMemory)
-				a.run("调整运行内存", func() error { return a.manager.SetMemory(m.ID, size) }, nil)
+				a.run(m.ID, "调整运行内存「"+m.Name+"」", func() error { return a.manager.SetMemory(m.ID, size) }, nil)
 			}
 		})
 	})

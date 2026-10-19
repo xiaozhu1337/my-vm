@@ -29,12 +29,12 @@ type Server struct {
 	server  *http.Server
 	active  atomic.Int64
 	Allow   func(string, string) error
-	Changed func()
+	Changed func(string)
 }
 
 func (s *Server) Active() bool { return s.active.Load() > 0 }
 func (s *Server) Close() error { return s.server.Close() }
-func Listen(manager *vm.Manager, allow func(string, string) error, changed func()) (*Server, error) {
+func Listen(manager *vm.Manager, allow func(string, string) error, changed func(string)) (*Server, error) {
 	name, descriptor, err := pipeName()
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.Changed != nil {
-		defer s.Changed()
+		defer s.Changed(machine.ID)
 	}
 	cfg, err = vm.Load(filepath.Join(s.manager.Root, "library.yaml"))
 	if err == nil {
