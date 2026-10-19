@@ -15,7 +15,7 @@ Windows 原生虚拟机管理器。管理界面使用 [MyGo](https://github.com/
 - Windows 10、Windows 11、Ubuntu 26 及其他 Windows/Linux 系统配置；已有清单保持兼容。
 - 基础控制台用于固件和安装；增强会话提供窗口分辨率调整和剪贴板。
 - Linux 支持 GNOME 和 KDE Plasma 的 Wayland 当前桌面共享，也保留 X11/xrdp；窗口画面自动缩放，客户机分辨率调整与剪贴板格式由原生服务决定。
-- 离线增强 ISO 内置 Ubuntu/Kubuntu 26.04、26.10 amd64 的依赖、证书与服务配置；详情页“安装增强能力”支持运行中插入光盘。
+- 离线增强 ISO 内置 Ubuntu/Kubuntu 26.04、26.10 amd64 的依赖、证书与服务配置，以及 Windows 宿主匹配 GPU-PV 驱动包；详情页“安装增强能力”支持运行中插入光盘。
 - 增强会话的文本、图片、文件复制粘贴能力取决于客户机服务；不会同时重定向宿主整盘。
 - 选择主机文件夹映射，默认只读，可单独允许写入；Windows 自动分配空闲盘符，Linux 在文件管理器中挂载。
 - 内存按需分配与运行中热调整；与 NanaBox 同路径的 HCS GPU-PV 共享开关。
@@ -76,6 +76,8 @@ Wayland 控制台通过临时的宿主 `127.0.0.1` 端口，将带 TLS/NLA 认�
 “内存按需分配”对应 HCS `AllowOvercommit`，同时允许在线修改目标内存。它不是自动按最小/最大值调整的控制器，实际增减及回收受客户机 Hyper-V 内存驱动影响。运行中的调整不修改下次启动的配置值。
 
 GPU 开关默认关闭，必须为每台虚拟机单独启用；已有清单按自身的 `gpu_shared` 值运行。GPU 开关沿用 NanaBox 同类的 HCS GPU-PV 路径，启动后更新 `VirtualMachine/ComputeTopology/Gpu`，使用 `AssignmentMode: Default`、`AllowVendorExtension: true` 分配默认 GPU；NanaBox 的 `Mirror` 则投射所有 GPU。本项目不使用 `List` 固定分区 ID，也不依赖 PowerShell 配置 GPU-P 或 DDA。失败会报错。原版 Ubuntu 不自带所需 `dxgkrnl`，增强盘仅对已验证的内核和宿主驱动组合自动准备，并运行真实 CUDA 自检；不满足条件时明确跳过 GPU，其余增强仍可安装。兼容范围见 [linux-gpu.md](docs/linux-gpu.md)。
+
+Windows GPU-PV 还需客户机具备宿主匹配的用户态驱动包。新版增强盘会在基础控制台安装完整 HostDriverStore 和声明的补充文件，并重载设备；宿主驱动更新后需重新构建介质。现有 Win10 的 Code 43 已通过补齐驱动消除，但 616.92 组合的 D3D/CUDA 初始化仍失败，硬件加速尚未验收通过，见 [验证记录](docs/validation.md)。
 
 快照是关机后的完整磁盘文件副本，每台最多 16 个；不含 RAM、UEFI 变量或运行状态，也不是 Hyper-V 完整检查点。创建和恢复需要额外磁盘空间，恢复前会确认。系统安装或固件设置发生变化时，应保留相应安装记录和配置。
 

@@ -68,6 +68,9 @@ func prepareSystem() error {
 	if err = startService(services, "WebClient"); err != nil {
 		return err
 	}
+	if err = prepareWindowsGPU(mediaRoot); err != nil {
+		return err
+	}
 	return prepareRemoteDesktop(services)
 }
 func startService(manager *mgr.Mgr, name string) error {

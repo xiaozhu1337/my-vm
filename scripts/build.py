@@ -27,6 +27,9 @@ def main():
     run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / 'gpu.py'))
     gpu_source = DIST / 'guest-payload' / 'gpu'
     gpu_files = verified_files(gpu_source)
+    run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / 'windows_gpu.py'))
+    windows_gpu_source = DIST / 'guest-payload' / 'windows-gpu'
+    windows_gpu_files = verified_files(windows_gpu_source)
     build_icon()
     run('mise', 'exec', 'go@1.27.2', '--', 'go', 'run',
         'github.com/tc-hib/go-winres@v0.3.3', 'simply', '--arch', 'amd64',
@@ -75,7 +78,9 @@ def main():
              'GNOME 会交互询问远程桌面专用凭据；KDE 使用当前系统账户密码。\n'
              '安装后在主机点击“增强会话”，确认客户机证书并登录。\n'
              '保留 TLS/NLA；客户机桌面需保持已登录。桌面剪贴板与显示调整由原生远程服务协商。\n'
-             'GPU-PV 仅在已验证的内核和宿主驱动组合下自动准备并运行 CUDA 自检。\n')
+             'Windows GPU-PV: 在基础控制台安装宿主匹配的 HostDriverStore 与补充文件，随后重载设备。\n'
+             'Linux GPU-PV: 仅在已验证的内核和宿主驱动组合下自动准备并运行 CUDA 自检。\n'
+             '设备代码正常不代表硬件图形/计算已通过；实际兼容性和未通过项见项目验证记录。\n')
         linux = STAGE / 'linux'
         directory(linux)
         for version in VERSIONS:
@@ -87,17 +92,18 @@ def main():
                 link(source / name, target / name)
             for package in payloads[version]:
                 link(package, target / 'pool' / package.name)
-        gpu = STAGE / 'gpu'
-        directory(gpu)
-        link(gpu_source / 'manifest.yaml', gpu / 'manifest.yaml')
-        for source in gpu_files:
-            relative = source.relative_to(gpu_source)
-            parent = gpu
-            for part in relative.parts[:-1]:
-                parent /= part
-                if not parent.exists():
-                    directory(parent)
-            link(source, gpu / relative)
+        for source_root, sources in ((gpu_source, gpu_files), (windows_gpu_source, windows_gpu_files)):
+            gpu = STAGE / source_root.name
+            directory(gpu)
+            link(source_root / 'manifest.yaml', gpu / 'manifest.yaml')
+            for source in sources:
+                relative = source.relative_to(source_root)
+                parent = gpu
+                for part in relative.parts[:-1]:
+                    parent /= part
+                    if not parent.exists():
+                        directory(parent)
+                link(source, gpu / relative)
         run('mise', 'exec', 'go@1.27.2', '--', 'go', 'build', '-trimpath',
             '-o', str(DIST / 'my-vm-cli.exe'), './cmd/my-vm-cli',
             env=dict(os.environ, GOOS='windows', GOARCH='amd64', CGO_ENABLED='0'))

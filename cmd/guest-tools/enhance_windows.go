@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -41,7 +42,7 @@ func elevatePrepare(exe string) error {
 		Icon                              uintptr
 		Process                           windows.Handle
 	}{Mask: 0x40, Verb: windows.StringToUTF16Ptr("runas"), File: windows.StringToUTF16Ptr(exe),
-		Parameters: windows.StringToUTF16Ptr("--prepare --user-sid " + original.User.Sid.String()), Show: 1}
+		Parameters: windows.StringToUTF16Ptr("--prepare --user-sid " + original.User.Sid.String() + " --media " + syscall.EscapeArg(mediaRoot)), Show: 1}
 	info.Size = uint32(unsafe.Sizeof(info))
 	ok, _, err := windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
 	if ok == 0 {
