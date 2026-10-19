@@ -11,6 +11,7 @@ import (
 	"github.com/oneo-me/onevra/source/components"
 	"my-vm/internal/hcs"
 	"my-vm/internal/networkmgr"
+	"my-vm/internal/vm"
 )
 
 type hostAdapter struct {
@@ -104,6 +105,11 @@ func (a *application) settings(c *ui.Context) {
 				infoRow(c, "引擎", "Hyper-V Host Compute Service / HCS")
 				infoRow(c, "客户机", "第二代 UEFI，x64；Windows 10/11 或受支持的 Linux 发行版。")
 				infoRow(c, "控制台", "普通入口先进入基础画面，增强就绪后自动切换；维护入口保持基础画面。")
+				mitigations := a.config.SideChannelMitigations
+				if ui.Checkbox(c, &mitigations, "启用侧通道缓解").Disabled(a.busy || a.loadError != nil || a.diskBusy("global-settings")).Changed() {
+					a.saveSideChannelMitigations(mitigations)
+				}
+				muted(c, "默认关闭；仅影响此后启动的虚拟机，已运行的虚拟机需正常关机后启动。关闭时隐藏客户机推测执行缓解控制，不修改宿主 Windows 的安全策略。")
 			})
 		case 1:
 			a.globalNetworks(c)
@@ -138,6 +144,13 @@ func (a *application) settings(c *ui.Context) {
 		}
 	})
 }
+func (a *application) saveSideChannelMitigations(enabled bool) {
+	a.runConfig("global-settings", "保存侧通道缓解设置", func() error { return nil }, func(cfg *vm.Config) error {
+		cfg.SideChannelMitigations = enabled
+		return nil
+	}, nil)
+}
+
 func (a *application) globalNetworks(c *ui.Context) {
 	card(c, "虚拟网络", "Default Switch 自动分配地址；自定义 NAT 没有 DHCP，需在客户机设置静态 IP、网关和 DNS。", func() {
 		if button(c, "刷新网络", !a.diskBusy("host-networks")) {

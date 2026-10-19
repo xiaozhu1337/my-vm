@@ -46,6 +46,9 @@ func (a *enhancedAvailability) finish(ready bool) bool {
 }
 
 func enhancedState(ctx context.Context, runtimeID, kind string) string {
+	if kind == "x11" {
+		return "unsupported"
+	}
 	// A valid unknown state must not be overridden by an older readiness query.
 	state := probeAvailability(ctx, runtimeID, kind+"-status")
 	if state != "unavailable" {
@@ -81,6 +84,9 @@ func probeAvailability(parent context.Context, runtimeID, kind string) string {
 }
 
 func protocolAvailability(clientStatus guestops.Status, kind string) string {
+	if kind == "x11" || clientStatus.OS == "linux" && clientStatus.Desktop.Mode == "x11" {
+		return "unsupported"
+	}
 	if kind == "windows" && clientStatus.OS != "windows" || kind != "windows" && clientStatus.OS != "linux" || (kind == "x11" || kind == "wayland") && clientStatus.Desktop.Mode != kind {
 		return "unsupported"
 	}

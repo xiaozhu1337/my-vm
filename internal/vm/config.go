@@ -57,8 +57,9 @@ type COMPort struct {
 type Share = sharing.Share
 
 type Config struct {
-	QEMUDir  string    `yaml:"qemu_dir"`
-	Machines []Machine `yaml:"machines"`
+	SideChannelMitigations bool      `yaml:"side_channel_mitigations"`
+	QEMUDir                string    `yaml:"qemu_dir"`
+	Machines               []Machine `yaml:"machines"`
 }
 
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -223,20 +224,21 @@ func Save(path string, cfg Config) error {
 		return err
 	}
 	comments := map[string]string{
-		"network_adapters": "附加网卡，不包含 network/switch_id 指定的主网卡；合计最多 8 张。",
-		"mac_address":      "可选 6 字节单播 MAC 地址；留空由 HCN 随机分配，同一虚拟机不能重复。",
-		"com_ports":        "串口列表；仅支持 COM1、COM2，编号和管道均不能重复。",
-		"number":           "串口编号：1 表示 COM1，2 表示 COM2。",
-		"pipe":             `本机绝对命名管道 \\.\pipe\...；my-vm- 前缀保留给控制台。`,
-		"guest_os":         "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
-		"linux_desktop":    "Linux 增强会话：wayland 使用 GNOME Remote Desktop 或 KDE KRdp，x11 使用 xrdp；Ubuntu 26 默认 wayland，旧 linux 默认 x11。",
-		"dynamic_memory":   "允许 HCS 按需分配内存及运行中修改内存；实际回收能力取决于客户机集成驱动。",
-		"gpu_shared":       "启用 Hyper-V GPU-PV 共享，默认关闭；需要兼容主机和客户机驱动，不保证显卡支持。",
-		"backend":          "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",
-		"switch_id":        "HCN 交换机 GUID；NAT 留空时精确选择系统 Default Switch，桥接须指定现有外部交换机。",
-		"clipboard":        "允许增强会话的剪贴板重定向；可用格式由客户机远程桌面服务决定。",
-		"shares":           "映射到客户机的主机文件夹；默认只读。",
-		"path":             "主机文件夹的绝对路径。", "read_only": "true 只允许读取，false 允许修改主机文件。",
+		"side_channel_mitigations": "全局侧通道缓解开关，默认 false；关闭时向新启动的虚拟机隐藏推测执行控制能力，不修改宿主策略，运行中的虚拟机需关机后启动生效。",
+		"network_adapters":         "附加网卡，不包含 network/switch_id 指定的主网卡；合计最多 8 张。",
+		"mac_address":              "可选 6 字节单播 MAC 地址；留空由 HCN 随机分配，同一虚拟机不能重复。",
+		"com_ports":                "串口列表；仅支持 COM1、COM2，编号和管道均不能重复。",
+		"number":                   "串口编号：1 表示 COM1，2 表示 COM2。",
+		"pipe":                     `本机绝对命名管道 \\.\pipe\...；my-vm- 前缀保留给控制台。`,
+		"guest_os":                 "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
+		"linux_desktop":            "Linux 增强会话仅支持 wayland（现有 GNOME/KDE）；旧 x11 配置只为兼容读取保留，增强方式已停用，不安装或替换桌面。",
+		"dynamic_memory":           "允许 HCS 按需分配内存及运行中修改内存；实际回收能力取决于客户机集成驱动。",
+		"gpu_shared":               "启用 Hyper-V GPU-PV 共享，默认关闭；需要兼容主机和客户机驱动，不保证显卡支持。",
+		"backend":                  "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",
+		"switch_id":                "HCN 交换机 GUID；NAT 留空时精确选择系统 Default Switch，桥接须指定现有外部交换机。",
+		"clipboard":                "允许增强会话的剪贴板重定向；可用格式由客户机远程桌面服务决定。",
+		"shares":                   "映射到客户机的主机文件夹；默认只读。",
+		"path":                     "主机文件夹的绝对路径。", "read_only": "true 只允许读取，false 允许修改主机文件。",
 		"qemu_dir": "旧版本的 QEMU 目录，仅为兼容读取保留，HCS 不使用。",
 		"machines": "虚拟机清单；HCS 磁盘位于同目录 machines/<id>/disk.vhdx。",
 		"id":       "内部唯一标识；请勿修改。", "name": "显示名称；共享项名称需为字母开头的英文、数字、下划线或连字符。", "cpus": "虚拟 CPU 数量。",

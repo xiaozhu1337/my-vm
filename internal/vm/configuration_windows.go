@@ -24,6 +24,10 @@ func ConfigurationWithEndpoints(root string, m Machine, endpoints []string) (map
 	if err := requireHCS(m); err != nil {
 		return nil, err
 	}
+	settings, err := Load(filepath.Join(root, "library.yaml"))
+	if err != nil {
+		return nil, err
+	}
 	var token windows.Token
 	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
 		return nil, err
@@ -33,11 +37,11 @@ func ConfigurationWithEndpoints(root string, m Machine, endpoints []string) (map
 	if err != nil {
 		return nil, err
 	}
-	return configurationWithEndpoints(root, m, endpoints, user.User.Sid.String())
+	return configurationWithEndpoints(root, m, endpoints, user.User.Sid.String(), settings.SideChannelMitigations)
 }
 
 // Keep schema construction pure so device validation never needs native services in tests.
-func configurationWithEndpoints(root string, m Machine, endpoints []string, sid string) (map[string]any, error) {
+func configurationWithEndpoints(root string, m Machine, endpoints []string, sid string, sideChannelMitigations bool) (map[string]any, error) {
 	if err := requireHCS(m); err != nil {
 		return nil, err
 	}
@@ -93,7 +97,7 @@ func configurationWithEndpoints(root string, m Machine, endpoints []string, sid 
 			"Services":        map[string]any{"Shutdown": map[string]any{}},
 			"StopOnReset":     false,
 			"Chipset":         map[string]any{"Uefi": map[string]any{"Console": "Default"}},
-			"ComputeTopology": map[string]any{"Memory": map[string]any{"SizeInMB": m.MemoryMiB, "AllowOvercommit": m.DynamicMemory}, "Processor": map[string]any{"Count": m.CPUs}},
+			"ComputeTopology": map[string]any{"Memory": map[string]any{"SizeInMB": m.MemoryMiB, "AllowOvercommit": m.DynamicMemory}, "Processor": map[string]any{"Count": m.CPUs, "DisableSpeculationControls": !sideChannelMitigations}},
 			"Devices":         devices,
 			"GuestState":      map[string]any{"GuestStateFilePath": filepath.Join(directory, "guest.vmgs"), "RuntimeStateFilePath": filepath.Join(directory, "runtime.vmrs")},
 		},

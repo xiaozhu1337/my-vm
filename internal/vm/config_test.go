@@ -114,12 +114,45 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+func TestSideChannelMitigations(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "library.yaml")
+	machine := NewMachine()
+	machine.Network = "none"
+	// Existing files without this field must default to disabled without a migration.
+	if err := os.WriteFile(path, []byte("machines: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.SideChannelMitigations {
+		t.Fatal("legacy config must disable mitigations", err)
+	}
+	for _, enabled := range []bool{false, true, false} {
+		cfg.SideChannelMitigations = enabled
+		if err = Save(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load(path)
+		if err != nil || loaded.SideChannelMitigations != enabled {
+			t.Fatal("global setting lost", err)
+		}
+		hcs, err := ConfigurationWithEndpoints(root, machine, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		processor := hcs["VirtualMachine"].(map[string]any)["ComputeTopology"].(map[string]any)["Processor"].(map[string]any)
+		if disabled, exists := processor["DisableSpeculationControls"]; !exists || disabled != !enabled || processor["Count"] != machine.CPUs {
+			t.Fatal("incorrect HCS mitigation flag", processor)
+		}
+	}
+}
+
 func TestConfiguration(t *testing.T) {
 	m := NewMachine()
 	m.ISO = `C:\安装,光盘.iso`
 	m.DriverISO = `C:\附加.iso`
 	m.Shares = []Share{{Name: "Files", Path: `C:\shared`, ReadOnly: true}}
-	cfg, err := configurationWithEndpoints(`C:\VM,中文`, m, []string{"endpoint-test"}, "S-1-5-21-test")
+	cfg, err := configurationWithEndpoints(`C:\VM,中文`, m, []string{"endpoint-test"}, "S-1-5-21-test", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +177,7 @@ func TestLinuxCredentialChannelWithoutSharedFolders(t *testing.T) {
 	machine := NewMachine()
 	machine.GuestOS = "linux"
 	machine.Shares = nil
-	cfg, err := configurationWithEndpoints(t.TempDir(), machine, []string{"endpoint-test"}, "S-1-5-21-test")
+	cfg, err := configurationWithEndpoints(t.TempDir(), machine, []string{"endpoint-test"}, "S-1-5-21-test", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +250,7 @@ func TestDeviceConfiguration(t *testing.T) {
 		if primary == "nat" {
 			endpoints = append([]string{"primary"}, endpoints...)
 		}
-		cfg, err := configurationWithEndpoints(`C:\VM`, m, endpoints, "current-user-sid")
+		cfg, err := configurationWithEndpoints(`C:\VM`, m, endpoints, "current-user-sid", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -242,13 +275,13 @@ func TestDeviceConfiguration(t *testing.T) {
 			}
 		}
 		for _, invalid := range [][]string{nil, append(endpoints, "extra"), {"", "additional2"}, {"same", "same"}} {
-			if _, err := configurationWithEndpoints(`C:\VM`, m, invalid, "sid"); err == nil {
+			if _, err := configurationWithEndpoints(`C:\VM`, m, invalid, "sid", false); err == nil {
 				t.Fatal("invalid endpoints accepted", invalid)
 			}
 		}
 	}
 	m.Network, m.NetworkAdapters, m.COMPorts = "none", nil, nil
-	cfg, err := configurationWithEndpoints(`C:\VM`, m, nil, "sid")
+	cfg, err := configurationWithEndpoints(`C:\VM`, m, nil, "sid", false)
 	if err != nil {
 		t.Fatal(err)
 	}

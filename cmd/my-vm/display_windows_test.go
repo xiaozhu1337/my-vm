@@ -27,10 +27,10 @@ func TestViewGuestDesktopMode(t *testing.T) {
 	a.config.Machines[0].GuestOS = "linux"
 	a.edit(a.config.Machines[0], false)
 	tt := testView(a, 1080, 2200)
-	if !tt.HasText("X11 / xrdp") {
-		t.Fatal("legacy Linux desktop changed")
+	if tt.HasText("X11 / xrdp") || a.draft.LinuxDesktop != "" {
+		t.Fatal("disabled legacy desktop offered or existing configuration changed")
 	}
-	click(t, tt, "X11 / xrdp")
+	click(t, tt, "基础画面（旧增强方式停用）")
 	click(t, tt, "Wayland / GNOME · KDE")
 	if a.draft.LinuxDesktop != "wayland" || a.config.Machines[0].LinuxDesktop != "" {
 		t.Fatal("desktop choice did not stay in draft")
@@ -39,6 +39,24 @@ func TestViewGuestDesktopMode(t *testing.T) {
 	click(t, tt, "Windows 11")
 	if a.draft.LinuxDesktop != "" {
 		t.Fatal("Windows retained a Linux desktop mode")
+	}
+}
+
+func TestGlobalMitigationsCheckbox(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		a := testApplication(t, 1)
+		a.page = "settings"
+		a.config.SideChannelMitigations = enabled
+		// Disable saving here; native UI and the main-thread event loop are not used by tests.
+		a.busy = true
+		tt := testView(a, 1080, 1800)
+		if !tt.HasText("启用侧通道缓解") {
+			t.Fatal("global setting not visible")
+		}
+		click(t, tt, "启用侧通道缓解")
+		if a.config.SideChannelMitigations != enabled || len(a.configurationSaves) != 0 {
+			t.Fatal("busy setting was changed")
+		}
 	}
 }
 

@@ -325,8 +325,8 @@ func Run(args []string, log io.Writer) error {
 			kind = "linux"
 		}
 		capability := probeDisplay(v.vmid, kind, log)
-		if capability.Mode == "" {
-			v.connectionFailed(fmt.Errorf("客户机增强画面尚未就绪，保留当前画面"))
+		if capability.Mode != "wayland" {
+			v.connectionFailed(fmt.Errorf("客户机增强画面尚未就绪，仅支持现有 GNOME/KDE Wayland 桌面，保留当前画面"))
 			return nil
 		}
 		v.wayland = capability.Mode == "wayland"

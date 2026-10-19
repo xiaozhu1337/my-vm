@@ -33,7 +33,7 @@ type displayCapability struct {
 // All commands are fixed read-only queries, executed as the already logged-in desktop user.
 const linuxDisplayQuery = `set -eu
 case "$XDG_SESSION_TYPE" in
- x11) systemctl is-active --quiet xrdp; printf 'x11\n';;
+ x11) exit 1;;
  wayland)
   locked=$(loginctl show-session auto -p LockedHint --value) || exit 1
   [ "$locked" = no ] || exit 1
@@ -113,7 +113,7 @@ func legacyDisplayFromGuest(client *http.Client, kind string) (displayCapability
 func parseDisplay(data []byte) (displayCapability, error) {
 	first, body, _ := bytes.Cut(data, []byte{'\n'})
 	result := displayCapability{Mode: strings.TrimSpace(string(first))}
-	if result.Mode != "windows" && result.Mode != "wayland" && result.Mode != "x11" {
+	if result.Mode != "windows" && result.Mode != "wayland" {
 		return displayCapability{}, errors.New("unknown guest desktop mode")
 	}
 	if result.Mode != "wayland" {
@@ -150,6 +150,9 @@ func parseDisplay(data []byte) (displayCapability, error) {
 }
 
 func probeDisplay(runtimeID, kind string, log io.Writer) displayCapability {
+	if kind == "x11" {
+		return displayCapability{}
+	}
 	if kind == "windows" {
 		return displayCapability{Mode: "windows"}
 	}
@@ -167,7 +170,7 @@ func probeDisplay(runtimeID, kind string, log io.Writer) displayCapability {
 	if err == nil && len(output) <= 8192 {
 		err = json.Unmarshal(output, &result)
 	}
-	if err != nil || (result.Mode != "windows" && result.Mode != "wayland" && result.Mode != "x11") {
+	if err != nil || (result.Mode != "windows" && result.Mode != "wayland") {
 		clear(result.Password)
 		if log != nil {
 			fmt.Fprintln(log, "增强桌面尚未就绪，使用基础控制台")
@@ -373,6 +376,10 @@ func (v *viewer) startRenderHost() {
 }
 
 func (v *viewer) switchRenderer(enhanced, automatic bool) {
+	if enhanced && v.linux && v.linuxMode == "x11" {
+		v.fail(errors.New("旧 X11 / Xfce 增强方式已停用，请使用基础画面或现有 GNOME/KDE Wayland 桌面"))
+		return
+	}
 	if v.closed {
 		return
 	}

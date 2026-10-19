@@ -21,7 +21,7 @@ import (
 )
 
 func TestProtocolAvailabilityRespectsModeAndState(t *testing.T) {
-	for _, test := range []struct{ os, mode, state, kind, want string }{{"linux", "wayland", "unknown", "linux", "unknown"}, {"linux", "wayland", "ready", "windows", "unsupported"}, {"windows", "windows", "ready", "windows", "ready"}, {"windows", "windows", "available", "windows", "available"}, {"linux", "wayland", "waiting", "linux", "waiting"}, {"linux", "wayland", "ready", "x11", "unsupported"}, {"windows", "windows", "ready", "linux", "unsupported"}, {"linux", "x11", "unsupported", "linux", "unsupported"}} {
+	for _, test := range []struct{ os, mode, state, kind, want string }{{"linux", "wayland", "unknown", "linux", "unknown"}, {"linux", "wayland", "ready", "windows", "unsupported"}, {"windows", "windows", "ready", "windows", "ready"}, {"windows", "windows", "available", "windows", "available"}, {"linux", "wayland", "waiting", "linux", "waiting"}, {"linux", "wayland", "ready", "x11", "unsupported"}, {"windows", "windows", "ready", "linux", "unsupported"}, {"linux", "x11", "unsupported", "linux", "unsupported"}, {"linux", "x11", "ready", "linux", "unsupported"}, {"linux", "x11", "ready", "x11", "unsupported"}} {
 		status := guestops.Status{Protocol: 1, OS: test.os, Desktop: guestops.DesktopStatus{Mode: test.mode, State: test.state}}
 		if test.want == "unsupported" || test.want == "unknown" {
 			bar := &consoleToolbar{availability: enhancedAvailability{results: make(chan string, 1)}}
@@ -43,7 +43,7 @@ func TestLinuxDisplayUsesProtocolBeforeLegacyCommands(t *testing.T) {
 		os, mode, state, kind string
 		fail                  bool
 	}{
-		{"linux", "x11", "ready", "linux", false}, {"linux", "wayland", "ready", "linux", false},
+		{"linux", "x11", "ready", "linux", true}, {"linux", "wayland", "ready", "linux", false},
 		{"linux", "wayland", "waiting", "linux", true}, {"linux", "wayland", "unknown", "linux", true},
 		{"linux", "wayland", "ready", "x11", true}, {"windows", "windows", "ready", "linux", true},
 	} {
@@ -86,6 +86,17 @@ func TestLinuxDisplayUsesProtocolBeforeLegacyCommands(t *testing.T) {
 	}
 }
 
+func TestLegacyX11EnhancementDisabled(t *testing.T) {
+	if got := probeDisplay("must-not-connect", "x11", io.Discard); got.Mode != "" {
+		t.Fatal("old X11 probe returned an enhanced display")
+	}
+	v := &viewer{linux: true, linuxMode: "x11", pipe: `\\.\pipe\my-vm-fixture.basic`, log: io.Discard}
+	v.switchRenderer(true, true)
+	if v.enhanced || !strings.Contains(v.status, "已停用") || v.pipe != `\\.\pipe\my-vm-fixture.basic` {
+		t.Fatal("disabled X11 changed the current display")
+	}
+}
+
 func TestLinuxSwitchNotReadyKeepsExistingViewer(t *testing.T) {
 	v := &viewer{linux: true, vmid: "not-ready", pipe: `\\.\pipe\my-vm-example.basic`, log: io.Discard}
 	v.switchDisplay(true, true)
@@ -100,7 +111,7 @@ func TestDisplayCapabilityDoesNotMixRDPAndVNCPasswords(t *testing.T) {
 		fail                        bool
 	}{
 		{"windows\r\n", "windows", "", "", false},
-		{"x11\n", "x11", "", "", false},
+		{"x11\n", "", "", "", true},
 		{"wayland\n", "wayland", "", "", false},
 		{"wayland\nRDP:\n\tStatus: enabled\n\tUsername: myvm\n\tPassword: secret with spaces\nVNC:\n\tPassword: wrong\n", "wayland", "myvm", "secret with spaces", false},
 		{"wayland\nRDP:\n\tStatus: disabled\n\tUsername: myvm\n\tPassword: secret\n", "", "", "", true},
@@ -127,7 +138,7 @@ func TestDisplayProbeRejectsFailedAndMismatchedDesktop(t *testing.T) {
 		exit            int
 		truncated, fail bool
 	}{
-		{"linux", "x11", 0, false, false},
+		{"linux", "x11", 0, false, true},
 		{"linux", "wayland", 0, false, false}, {"x11", "wayland", 0, false, true},
 		{"wayland", "x11", 0, false, true}, {"windows", "wayland", 0, false, true},
 		{"linux", "windows", 0, false, true}, {"linux", "wayland", 1, false, true},
@@ -200,7 +211,10 @@ func TestAutomaticDisplayProbeIsBounded(t *testing.T) {
 	if time.Since(started) > 10*time.Second {
 		t.Fatal("probe was not bounded by child lifetime")
 	}
-	for _, kind := range []string{"windows", "wayland", "x11"} {
+	if got := probeDisplay("x11", "linux", io.Discard); got.Mode != "" {
+		t.Fatal("legacy helper bypassed disabled X11 mode")
+	}
+	for _, kind := range []string{"windows", "wayland"} {
 		if got := probeDisplay(kind, kind, io.Discard); got.Mode != kind {
 			t.Fatalf("probe returned %q", got.Mode)
 		}

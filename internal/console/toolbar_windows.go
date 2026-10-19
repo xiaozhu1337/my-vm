@@ -144,7 +144,7 @@ func (v *viewer) layoutToolbar(dpi uintptr) {
 		case toolbarBasic:
 			enabled = enabled && (v.enhanced || v.automatic || v.host != nil && (!v.host.Active.BasicConnected() || v.host.Candidate != nil))
 		case toolbarEnhanced:
-			enabled = enabled && !v.enhanced && (v.host == nil || v.host.Candidate == nil)
+			enabled = enabled && !v.enhanced && !(v.linux && v.linuxMode == "x11") && (v.host == nil || v.host.Candidate == nil)
 		case toolbarKeys:
 			enabled = enabled && (v.nonScriptable != nil || v.host != nil && v.host.Active != nil && v.host.Active.Connected)
 		case toolbarPause, toolbarShutdown:
