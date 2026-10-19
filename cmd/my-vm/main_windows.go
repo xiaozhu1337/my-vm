@@ -90,7 +90,7 @@ func main() {
 		}
 	}()
 	mygo.App.WhenReady(func() {
-		shell := plain.NewShell(plain.ShellOptions{Title: "My VM · Windows 虚拟机管理器", Width: 1240, Height: 860, MinWidth: 1040, MinHeight: 700, Theme: appTheme, Content: a.view})
+		shell := plain.NewShell(plain.ShellOptions{Title: "My VM", Width: 1240, Height: 860, MinWidth: 1040, MinHeight: 700, Theme: appTheme, Content: a.view})
 		a.window = shell.Window()
 		controller, err = control.Listen(a.manager, a.beginExternal, a.finishExternal)
 		if err != nil {

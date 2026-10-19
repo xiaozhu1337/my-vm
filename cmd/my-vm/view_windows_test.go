@@ -143,10 +143,10 @@ func TestViewBusyBlocksActions(t *testing.T) {
 }
 
 func TestViewPowerStates(t *testing.T) {
-	for _, state := range []struct{ state, title, action string }{
-		{"已关机", "准备就绪", "启动虚拟机"},
-		{"运行中", "虚拟机正在运行", "打开画面"},
-		{"已暂停", "虚拟机已暂停", "继续运行"},
+	for _, state := range []struct{ state, action string }{
+		{"已关机", "启动虚拟机"},
+		{"运行中", "打开画面"},
+		{"已暂停", "继续运行"},
 	} {
 		t.Run(state.state, func(t *testing.T) {
 			a := testApplication(t, 1)
@@ -154,9 +154,9 @@ func TestViewPowerStates(t *testing.T) {
 				c.SetTheme(appTheme(c))
 				ui.Column(c).Label("menu-target").Fill().ContextMenu(func(menu *ui.Menu) {
 					a.machineMenu(menu, a.config.Machines[0], state.state)
-				}).Children(func() { a.statusCard(c, a.config.Machines[0], state.state) })
+				}).Children(func() { stateBadge(c, state.state) })
 			}, 700, 260)
-			if !tt.HasText(state.title) {
+			if !tt.HasText(state.state) {
 				t.Fatalf("wrong machine status: %q", tt.Texts())
 			}
 			if _, ok := tt.Find(state.action); ok {
@@ -291,8 +291,13 @@ func TestOverviewOnlyShowsInformation(t *testing.T) {
 			t.Fatalf("overview still has scattered action %q", label)
 		}
 	}
-	if !tt.HasText("设备与连接") || !tt.HasText("准备就绪") {
+	if !tt.HasText("设备与连接") || !tt.HasText("已关机") {
 		t.Fatal("overview lost its status and device information")
+	}
+	for _, label := range []string{"Windows 虚拟机工作台", "准备就绪", "启动虚拟机后，客户机画面将在独立窗口中打开。", "右键左侧虚拟机可查看全部操作。"} {
+		if tt.HasText(label) {
+			t.Fatalf("overview still has redundant information %q", label)
+		}
 	}
 }
 

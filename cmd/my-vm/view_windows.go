@@ -43,10 +43,7 @@ func (a *application) sidebar(c *ui.Context) {
 			if projectIconError == nil {
 				ui.Image(c, projectIcon).Width(44).Height(44).Label("My VM")
 			}
-			ui.Column(c).Gap(3).Children(func() {
-				components.Text(c, "My VM").FontSize(22).FontWeight(600)
-				muted(c, "Windows 虚拟机工作台")
-			})
+			components.Text(c, "My VM").FontSize(22).FontWeight(600)
 		})
 		if components.Button(c, "新建虚拟机", components.ButtonPrimary).FillWidth().MinHeight(40).Clicked() && a.leavePage() {
 			a.edit(vm.NewMachine(), true)

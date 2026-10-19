@@ -50,7 +50,6 @@ func (a *application) details(c *ui.Context) {
 			a.snapshotView(c, m, state == "已关机")
 			return
 		}
-		a.statusCard(c, m, state)
 		ui.Row(c).FillWidth().Gap(14).Children(func() {
 			metric(c, "处理器", fmt.Sprintf("%d 核", m.CPUs), "虚拟 CPU")
 			metric(c, "内存", fmt.Sprintf("%g GiB", float64(memory)/1024), fmt.Sprintf("%d MiB 已分配", memory))
@@ -88,25 +87,6 @@ func (a *application) details(c *ui.Context) {
 			}
 			infoRow(c, "磁盘位置", vm.DiskPath(a.root, m))
 		})
-	})
-}
-
-func (a *application) statusCard(c *ui.Context, m vm.Machine, state string) {
-	title, description := "准备就绪", "启动虚拟机后，客户机画面将在独立窗口中打开。"
-	if state != "已关机" {
-		title, description = "虚拟机正在运行", "打开画面时优先使用已就绪的增强桌面，否则显示基础控制台。"
-	}
-	if state == "已暂停" {
-		title, description = "虚拟机已暂停", "继续运行后，客户机才能响应操作与正常关机请求。"
-	}
-	if operation := a.operations[m.ID]; operation != "" {
-		title, description = operation+"…", "可继续切换或操作其他虚拟机。"
-	}
-	ui.Column(c).FillWidth().Gap(12).Padding(24).Radius(12).
-		Background(c.Theme().Surface.Mix(c.Theme().Accent, .06)).Border(1, c.Theme().Accent.Alpha(.18)).Children(func() {
-		components.Text(c, title).FontSize(22).FontWeight(600)
-		muted(c, description)
-		muted(c, "右键左侧虚拟机可查看全部操作。")
 	})
 }
 
