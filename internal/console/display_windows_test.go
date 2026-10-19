@@ -5,6 +5,7 @@ package console
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"testing"
@@ -211,7 +212,7 @@ func TestNativeDisplayUpdateBeforeConnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Release()
-	v := &viewer{client: client}
+	v := &viewer{client: client, log: io.Discard}
 	if err := v.initializeEvents(); err != nil {
 		t.Fatal(err)
 	}

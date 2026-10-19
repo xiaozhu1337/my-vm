@@ -15,9 +15,10 @@ import (
 var sessionEventIID = ole.NewGUID("{336D5562-EFA8-482E-8CB3-C5C0FC7A7DB6}")
 
 type sessionEvents struct {
-	table  *[7]uintptr
-	refs   atomic.Int32
-	viewer *viewer
+	table      *[7]uintptr
+	refs       atomic.Int32
+	viewer     *viewer
+	generation uintptr
 }
 
 type eventArguments struct {
@@ -40,7 +41,7 @@ var sessionEventTable = [7]uintptr{
 		return 0x80004002
 	}),
 	syscall.NewCallback(func(this *sessionEvents) uintptr { return uintptr(this.refs.Add(1)) }),
-	syscall.NewCallback(func(this *sessionEvents) uintptr { return uintptr(this.refs.Add(-1)) }),
+	syscall.NewCallback(func(this *sessionEvents) uintptr { return releaseCallback(this, &this.refs) }),
 	syscall.NewCallback(func(_ *sessionEvents, count *uint32) uintptr {
 		if count == nil {
 			return 0x80004003
@@ -56,16 +57,21 @@ var sessionEventTable = [7]uintptr{
 	}),
 	syscall.NewCallback(func(_ *sessionEvents, _, _, _, _, _ uintptr) uintptr { return 0x80020006 }),
 	syscall.NewCallback(func(this *sessionEvents, id int32, _ uintptr, _ uint32, _ uint16, args *eventArguments, _, _, _ uintptr) uintptr {
+		if !this.viewer.activeSession(this.generation) {
+			return 0
+		}
 		if id == 15 && args != nil && args.count == 1 && args.values != nil && args.values.VT == ole.VT_BYREF|ole.VT_BOOL && args.values.Val != 0 {
 			allow := *(**int16)(unsafe.Pointer(&args.values.Val))
 			*allow = -1
 		}
 		this.viewer.sessionEvent(id)
 		if id == 4 {
+			reason := int32(0)
+			if args != nil && args.count == 1 && args.values != nil && args.values.VT == ole.VT_I4 {
+				reason = int32(args.values.Val)
+			}
+			this.viewer.disconnected(reason)
 			this.viewer.requestBasic()
-		}
-		if this.viewer.wayland && !this.viewer.closed && id == 4 && args != nil && args.count == 1 && args.values != nil && args.values.VT == ole.VT_I4 {
-			this.viewer.disconnected(int32(args.values.Val))
 		}
 		return 0
 	}),
@@ -103,16 +109,28 @@ func (v *viewer) sessionEvent(id int32) {
 
 func (v *viewer) disconnected(reason int32) {
 	extended := int32(0)
-	if value, err := oleutil.GetProperty(v.client, "ExtendedDisconnectReason"); err == nil && value != nil {
-		extended = int32(value.Val)
-		_ = value.Clear()
+	if v.client != nil {
+		if value, err := oleutil.GetProperty(v.client, "ExtendedDisconnectReason"); err == nil && value != nil {
+			extended = int32(value.Val)
+			_ = value.Clear()
+		}
 	}
 	description := ""
-	if value, err := oleutil.CallMethod(v.client, "GetErrorDescription", uint32(reason), uint32(extended)); err == nil && value != nil {
-		description = value.ToString()
-		_ = value.Clear()
+	if v.client != nil {
+		if value, err := oleutil.CallMethod(v.client, "GetErrorDescription", uint32(reason), uint32(extended)); err == nil && value != nil {
+			description = value.ToString()
+			_ = value.Clear()
+		}
 	}
-	v.fail(fmt.Errorf("增强会话已断开（原因 %d，扩展 %d）: %s 若使用 GNOME，请先在基础控制台登录并解锁桌面；密码变更时，从窗口左上角菜单选择“忘记 Linux 登录凭据”，再重新打开增强会话。", reason, extended, description))
+	hint := ""
+	if v.wayland {
+		hint = " 若使用 GNOME，请先在基础控制台登录并解锁桌面；密码变更时，从窗口左上角菜单选择“忘记 Linux 登录凭据”，再重新打开增强会话。"
+	}
+	mode := "基础控制台"
+	if v.enhanced {
+		mode = "增强会话"
+	}
+	v.fail(fmt.Errorf("%s已断开（原因 %d，扩展 %d）: %s%s", mode, reason, extended, description, hint))
 }
 
 func (v *viewer) initializeEvents() error {
@@ -126,10 +144,11 @@ func (v *viewer) initializeEvents() error {
 	if err := container.FindConnectionPoint(sessionEventIID, &point); err != nil {
 		return err
 	}
-	sink := &sessionEvents{table: &sessionEventTable, viewer: v}
-	sink.refs.Store(1)
+	sink := &sessionEvents{table: &sessionEventTable, viewer: v, generation: v.generation}
+	registerCallback(sink, &sink.refs)
 	cookie, err := point.Advise((*ole.IUnknown)(unsafe.Pointer(sink)))
 	if err != nil {
+		releaseCallback(sink, &sink.refs)
 		point.Release()
 		return err
 	}
@@ -144,5 +163,9 @@ func (v *viewer) closeEvents() {
 		}
 		v.eventPoint.Release()
 		v.eventPoint = nil
+	}
+	if v.events != nil {
+		releaseCallback(v.events, &v.events.refs)
+		v.events = nil
 	}
 }

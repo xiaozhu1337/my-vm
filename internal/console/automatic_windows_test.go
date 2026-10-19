@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 	"unicode/utf16"
 	"unsafe"
+
+	ole "github.com/go-ole/go-ole"
 )
 
 func TestProtocolAvailabilityRespectsModeAndState(t *testing.T) {
@@ -202,4 +205,91 @@ func TestAutomaticDisplayProbeIsBounded(t *testing.T) {
 			t.Fatalf("probe returned %q", got.Mode)
 		}
 	}
+}
+
+func TestStaleCallbacksCannotChangeReplacementSession(t *testing.T) {
+	v := &viewer{generation: 2, automatic: true, enhanced: true, log: io.Discard}
+	connector := &connectorCallback{table: &callbackTable, viewer: v, generation: 1}
+	events := &sessionEvents{table: &sessionEventTable, viewer: v, generation: 1}
+	var pinned runtime.Pinner
+	pinned.Pin(v)
+	pinned.Pin(connector)
+	pinned.Pin(events)
+	defer pinned.Unpin()
+	for _, closed := range []bool{false, true} {
+		v.closed = closed
+		// A stale success must be rejected before dereferencing a stream or client.
+		_, _, _ = syscall.SyscallN(callbackTable[3], uintptr(unsafe.Pointer(connector)), 0)
+		_, _, _ = syscall.SyscallN(callbackTable[4], uintptr(unsafe.Pointer(connector)), 0x80004005)
+		for _, id := range []uintptr{1, 3, 4, 18, 19, 33} {
+			_, _, _ = syscall.SyscallN(sessionEventTable[6], uintptr(unsafe.Pointer(events)), id, 0, 0, 0, 0, 0, 0, 0)
+		}
+		if v.fallbackPending || v.loggedIn || v.status != "" {
+			t.Fatal("retired COM callbacks changed the replacement session")
+		}
+	}
+}
+
+func TestQueuedFallbackBelongsToOneSession(t *testing.T) {
+	v := &viewer{generation: 2, automatic: true, enhanced: true, fallbackPending: true}
+	if v.acceptFallback(1) || !v.acceptFallback(2) {
+		t.Fatal("fallback message was not restricted to its originating session")
+	}
+	v.fallbackPending = false
+	if v.acceptFallback(2) {
+		t.Fatal("message with no pending failure requested fallback")
+	}
+	v.fallbackPending, v.closed = true, true
+	if v.acceptFallback(2) {
+		t.Fatal("closed viewer accepted fallback")
+	}
+}
+
+func TestWindowsDisconnectReasonSurvivesBasicReconnect(t *testing.T) {
+	var log bytes.Buffer
+	bar := &consoleToolbar{}
+	v := &viewer{generation: 2, automatic: true, enhanced: true, loggedIn: true, toolbar: bar, log: &log, headerHidden: true}
+	events := &sessionEvents{table: &sessionEventTable, viewer: v, generation: 2}
+	reason := &ole.VARIANT{VT: ole.VT_I4, Val: 3}
+	args := &eventArguments{count: 1, values: reason}
+	var pinned runtime.Pinner
+	for _, value := range []any{v, events, reason, args} {
+		pinned.Pin(value)
+	}
+	defer pinned.Unpin()
+	_, _, _ = syscall.SyscallN(sessionEventTable[6], uintptr(unsafe.Pointer(events)), 4, 0, 0, 0, uintptr(unsafe.Pointer(args)), 0, 0, 0)
+	if !strings.Contains(log.String(), "原因 3，扩展 0") || strings.Contains(log.String(), "GNOME") || !v.fallbackPending || v.loggedIn || v.closed {
+		t.Fatal("Windows disconnect did not log its reason before queuing fallback", log.String())
+	}
+	v.setStatus("正在重新连接")
+	v.retainFallbackReason()
+	for range 3 {
+		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
+		if !strings.Contains(v.status, "原因 3") || !strings.Contains(v.status, "已返回基础画面") || !v.statusError || v.headerHidden {
+			t.Fatal("basic reconnect or status refresh erased the enhanced failure", v.status)
+		}
+	}
+}
+
+func TestCallbackRootsFollowNativeReferences(t *testing.T) {
+	check := func(object any, refs *atomic.Int32, address, add, release uintptr) {
+		t.Helper()
+		registerCallback(object, refs)
+		_, _, _ = syscall.SyscallN(add, address)
+		if got := releaseCallback(object, refs); got != 1 {
+			t.Fatal("closing creator reference released a native reference", got)
+		}
+		runtime.GC()
+		if _, held := callbackRoots.Load(object); !held {
+			t.Fatal("native callback lost its Go root before final Release")
+		}
+		count, _, _ := syscall.SyscallN(release, address)
+		if _, held := callbackRoots.Load(object); count != 0 || held {
+			t.Fatal("final native Release leaked its Go root")
+		}
+	}
+	connector := &connectorCallback{table: &callbackTable}
+	check(connector, &connector.refs, uintptr(unsafe.Pointer(connector)), callbackTable[1], callbackTable[2])
+	events := &sessionEvents{table: &sessionEventTable}
+	check(events, &events.refs, uintptr(unsafe.Pointer(events)), sessionEventTable[1], sessionEventTable[2])
 }

@@ -4,6 +4,7 @@ package console
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
@@ -44,8 +45,8 @@ func (v *viewer) initializePipe() error {
 	if err != nil {
 		return err
 	}
-	v.callback = &connectorCallback{table: &callbackTable, viewer: v}
-	v.callback.refs.Store(1)
+	v.callback = &connectorCallback{table: &callbackTable, viewer: v, generation: v.generation}
+	registerCallback(v.callback, &v.callback.refs)
 	return call(v.connector, 3, uintptr(unsafe.Pointer(v.callback)))
 }
 
@@ -85,9 +86,26 @@ func extended(client *ole.IDispatch, name string, value ole.VARIANT) error {
 }
 
 type connectorCallback struct {
-	table  *[5]uintptr
-	refs   atomic.Int32
-	viewer *viewer
+	table      *[5]uintptr
+	refs       atomic.Int32
+	viewer     *viewer
+	generation uintptr
+}
+
+// Native COM references are invisible to Go's GC.
+var callbackRoots sync.Map
+
+func registerCallback(object any, refs *atomic.Int32) {
+	refs.Store(1)
+	callbackRoots.Store(object, struct{}{})
+}
+
+func releaseCallback(object any, refs *atomic.Int32) uintptr {
+	count := refs.Add(-1)
+	if count == 0 {
+		callbackRoots.Delete(object)
+	}
+	return uintptr(count)
 }
 
 var connectorIID = ole.NewGUID("{D923EFE9-0A6D-4344-92B3-164229DB8D2D}")
@@ -101,10 +119,10 @@ var callbackTable = [5]uintptr{
 		return 0x80004002
 	}),
 	syscall.NewCallback(func(this *connectorCallback) uintptr { return uintptr(this.refs.Add(1)) }),
-	syscall.NewCallback(func(this *connectorCallback) uintptr { return uintptr(this.refs.Add(-1)) }),
+	syscall.NewCallback(func(this *connectorCallback) uintptr { return releaseCallback(this, &this.refs) }),
 	syscall.NewCallback(func(this *connectorCallback, stream *ole.IUnknown) uintptr {
 		v := this.viewer
-		if v.closed {
+		if !v.activeSession(this.generation) {
 			return 0
 		}
 		endpoint := ole.VARIANT{VT: ole.VT_UNKNOWN, Val: int64(uintptr(unsafe.Pointer(stream)))}
@@ -121,7 +139,7 @@ var callbackTable = [5]uintptr{
 		return 0
 	}),
 	syscall.NewCallback(func(this *connectorCallback, hr uintptr) uintptr {
-		if !this.viewer.closed {
+		if this.viewer.activeSession(this.generation) {
 			this.viewer.connectionFailed(fmt.Errorf("控制台管道连接失败: HRESULT 0x%08X", uint32(hr)))
 		}
 		return 0

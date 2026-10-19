@@ -37,9 +37,11 @@ type viewer struct {
 	eventPoint                                  *ole.IConnectionPoint
 	eventCookie                                 uint32
 	loggedIn                                    bool
+	generation                                  uintptr
 	loginTarget, loginNotice                    string
 	pendingLogin, automaticLogin                *loginCredential
 	automatic, fallbackPending                  bool
+	fallbackReason                              string
 	enhanced, clipboard, linux, wayland, closed bool
 	stopBridge                                  func()
 	rdpPort                                     int
@@ -119,7 +121,7 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			user32.NewProc("RedrawWindow").Call(hwnd, 0, 0, 0x85)
 		}
 	case 0x8002:
-		if v != nil && v.automatic && v.enhanced && !v.closed {
+		if v != nil && v.acceptFallback(wparam) {
 			v.fallbackBasic()
 		}
 		return 0
@@ -564,6 +566,7 @@ func (v *viewer) close() {
 		return
 	}
 	v.closed = true
+	v.generation++
 	if v.stopBridge != nil {
 		v.stopBridge()
 		v.stopBridge = nil
@@ -605,5 +608,9 @@ func (v *viewer) close() {
 		_ = call(v.context, 13)
 		v.context.Release()
 		v.context = nil
+	}
+	if v.callback != nil {
+		releaseCallback(v.callback, &v.callback.refs)
+		v.callback = nil
 	}
 }

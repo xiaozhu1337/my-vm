@@ -194,14 +194,23 @@ func (v *viewer) connectionFailed(err error) {
 	v.requestBasic()
 }
 
+func (v *viewer) activeSession(generation uintptr) bool {
+	return !v.closed && v.generation == generation
+}
+
+func (v *viewer) acceptFallback(generation uintptr) bool {
+	return v.activeSession(generation) && v.automatic && v.enhanced && v.fallbackPending
+}
+
 func (v *viewer) requestBasic() {
 	if !v.automatic || !v.enhanced || v.closed || v.fallbackPending {
 		return
 	}
 	v.fallbackPending = true
+	v.fallbackReason = v.status
 	// Do not dismantle COM while processing one of its callbacks, or time out authentication UI.
 	if v.hwnd != 0 {
-		user32.NewProc("PostMessageW").Call(v.hwnd, 0x8002, 0, 0)
+		user32.NewProc("PostMessageW").Call(v.hwnd, 0x8002, v.generation, 0)
 	}
 }
 
@@ -216,7 +225,19 @@ func (v *viewer) fallbackBasic() {
 	if !v.automatic || !v.enhanced || v.closed {
 		return
 	}
+	if !v.fallbackPending {
+		v.fallbackReason = v.status
+	}
+	v.retainFallbackReason()
 	v.switchDisplay(false, true)
+}
+
+func (v *viewer) retainFallbackReason() {
+	if v.toolbar != nil {
+		v.toolbar.notice = "增强连接失败，已返回基础画面：" + v.fallbackReason
+		v.toolbar.noticeError = true
+	}
+	v.headerHidden = false
 }
 
 func (v *viewer) switchDisplay(enhanced, automatic bool) {
@@ -238,6 +259,9 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 	}
 	hwnd, header, headerClose := v.hwnd, v.header, v.headerClose
 	headerHidden, toolbar := v.headerHidden, v.toolbar
+	if enhanced && toolbar != nil {
+		toolbar.notice, toolbar.noticeError = "", false
+	}
 	v.clearPrompt()
 	pipe, runtimeID, title, log := basicDisplayPipe(v.pipe), v.vmid, v.title, v.log
 	linux, clipboard, linuxMode, machineID := v.linux, v.clipboard, v.linuxMode, v.machineID
@@ -246,7 +270,7 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 		pipe = strings.TrimSuffix(pipe, ".basic") + ".enhanced"
 	}
 	*v = viewer{hwnd: hwnd, header: header, headerClose: headerClose, headerHidden: headerHidden, toolbar: toolbar,
-		pipe: pipe, vmid: runtimeID, title: title, log: log, automatic: automatic, enhanced: enhanced, linux: linux, clipboard: clipboard, linuxMode: linuxMode, machineID: machineID}
+		pipe: pipe, vmid: runtimeID, title: title, log: log, generation: v.generation, automatic: automatic, enhanced: enhanced, linux: linux, clipboard: clipboard, linuxMode: linuxMode, machineID: machineID}
 	if enhanced && linux {
 		v.wayland = capability.Mode == "wayland"
 	}
@@ -281,7 +305,7 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 	user32.NewProc("SetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(caption)))
 	v.setStatus("正在连接" + mode)
 	if log != nil {
-		fmt.Fprintln(log, "切换画面:", mode)
+		fmt.Fprintln(log, "切换画面:", mode, "会话:", v.generation)
 	}
 	if err := v.initialize(); err != nil {
 		v.connectionFailed(err)
