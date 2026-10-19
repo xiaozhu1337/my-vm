@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"my-vm/internal/rdpauth"
 	"net/http"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ type Service struct {
 }
 
 func ServiceGUID() string { return winio.VsockServiceID(Port).String() }
-func Start(runtimeID string, shares []Share, log io.Writer) (*Service, error) {
+func Start(runtimeID string, shares []Share, log io.Writer, saveLogin func(*rdpauth.Login) error) (*Service, error) {
 	if log == nil {
 		log = io.Discard
 	}
@@ -60,6 +61,7 @@ func Start(runtimeID string, shares []Share, log io.Writer) (*Service, error) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(shares)
 	})
+	mux.Handle("/rdp-credentials", credentialHandler(saveLogin))
 	mux.Handle("/", handler)
 	server := &http.Server{ErrorLog: stdlog.New(log, "Shared folders: ", 0), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Minute, WriteTimeout: 10 * time.Minute, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32768}
 	result := &Service{server: server, listener: listener, closeRoots: closeRoots}

@@ -61,7 +61,7 @@ dist\my-vm-guest-tools-linux.iso
 
 NAT 自动选网使用 Windows 保留标识对应的 `Default Switch`，不会把 WSL 的其他 ICS 网络当作默认交换机。Default Switch 提供 DHCP；找不到时明确报错。显式指定交换机时由该网络提供 DHCP 或客户机配置静态地址。若旧版本已接入 WSL 交换机，请正常关闭客户机并用新版重新启动，让网卡重新接入正确网络；无需重装系统。
 
-完整操作见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland。GNOME 新安装自动生成独立 RDP 凭据，主机经当前 VM 的私有通道读取桌面密钥环并自动登录；现有 GNOME 凭据也可复用，无需首次手输、勾选保存或重装系统。密钥环需可访问，证书确认、客户机登录与解锁仍由用户完成。KDE 继续使用当前 Linux 账户密码，可在首次输入时保存到按 VM 隔离的 Windows 凭据管理器；当前不承诺 KDE 首次免输入。自动入口以当前代理、服务和桌面状态选择，探测失败使用基础控制台；旧 `guest_os: linux` 可识别当前 X11/Wayland，显式桌面选择仍受尊重。细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
+完整操作见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland。GNOME/KDE 新安装均自动生成独立 RDP 凭据，分别存入密钥环或 KWallet，再由该 VM 的私有通道交给宿主管理器，按 VM 保存到 Windows 凭据管理器；无需首次输入 Linux 系统密码或手动勾选保存。旧 GNOME 凭据也可从当前密钥环复用。客户机需先由新版管理器启动，再运行新版 Linux 增强安装器；无需共享目录或互联网。密钥环/钱包授权、未知证书确认、客户机登录与解锁仍由用户完成。自动入口以当前代理、服务和桌面状态选择，探测失败使用基础控制台；旧 `guest_os: linux` 可识别当前 X11/Wayland，显式桌面选择仍受尊重。细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
 
 命令行示例见 [command-line.md](docs/command-line.md)。Windows 10、Ubuntu 26 自动安装的可行方案及交付前条件见 [automatic-installation.md](docs/automatic-installation.md)，本轮尚未提供无人值守安装复选框。
 

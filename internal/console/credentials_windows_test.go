@@ -143,10 +143,3 @@ func TestLoginPasswordSetter(t *testing.T) {
 	}
 	clear(received)
 }
-
-func TestNativeCredentialLayout(t *testing.T) {
-	var c nativeCredential
-	if unsafe.Sizeof(c) != 80 || unsafe.Offsetof(c.Blob) != 40 || unsafe.Offsetof(c.UserName) != 72 {
-		t.Fatal("CREDENTIALW layout does not match Windows x64")
-	}
-}

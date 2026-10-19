@@ -3,10 +3,8 @@
 package console
 
 import (
-	"crypto/sha256"
-	"errors"
 	"fmt"
-	"strings"
+	"my-vm/internal/rdpauth"
 	"syscall"
 	"unsafe"
 
@@ -14,7 +12,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-var credentialAPI = windows.NewLazySystemDLL("advapi32.dll")
 var credentialUI = windows.NewLazySystemDLL("credui.dll")
 
 const forgetLoginCommand = 0x1e00
@@ -33,58 +30,21 @@ func (c *loginCredential) clear() {
 }
 
 // Credential keys follow the stable VM pipe, never the shared loopback address or transient port.
-func loginTarget(pipe string) string {
-	return fmt.Sprintf("MyVM/LinuxRDP/%x", sha256.Sum256([]byte(strings.ToLower(pipe))))
-}
-
-type nativeCredential struct {
-	Flags, Type             uint32
-	TargetName, Comment     *uint16
-	LastWritten             windows.Filetime
-	BlobSize                uint32
-	Blob                    *byte
-	Persist, AttributeCount uint32
-	Attributes              uintptr
-	TargetAlias, UserName   *uint16
-}
+func loginTarget(pipe string) string { return rdpauth.Target(pipe) }
 
 func readLogin(target string) (*loginCredential, error) {
-	var native *nativeCredential
-	ok, _, err := credentialAPI.NewProc("CredReadW").Call(uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(target))), 1, 0, uintptr(unsafe.Pointer(&native)))
-	if ok == 0 {
-		if errors.Is(err, windows.ERROR_NOT_FOUND) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("读取 Linux 登录凭据: %w", err)
+	username, password, err := rdpauth.Read(target)
+	if err != nil || password == nil {
+		return nil, err
 	}
-	defer credentialAPI.NewProc("CredFree").Call(uintptr(unsafe.Pointer(native)))
-	if native.Type != 1 || native.BlobSize == 0 || native.BlobSize%2 != 0 || native.BlobSize > 512 || native.Blob == nil || native.UserName == nil {
-		return nil, fmt.Errorf("保存的 Linux 登录凭据无效，请先忘记登录凭据")
-	}
-	blob := unsafe.Slice((*uint16)(unsafe.Pointer(native.Blob)), int(native.BlobSize)/2)
-	defer clear(blob)
-	return &loginCredential{username: windows.UTF16PtrToString(native.UserName), password: append([]uint16(nil), blob...)}, nil
+	return &loginCredential{username: username, password: password}, nil
 }
 
 func writeLogin(target string, login *loginCredential) error {
-	if len(login.password) == 0 || len(login.password) > 256 {
-		return fmt.Errorf("Linux 登录密码长度无效")
-	}
-	native := nativeCredential{Type: 1, TargetName: windows.StringToUTF16Ptr(target), BlobSize: uint32(len(login.password) * 2), Blob: (*byte)(unsafe.Pointer(&login.password[0])), Persist: 2, UserName: windows.StringToUTF16Ptr(login.username)}
-	ok, _, err := credentialAPI.NewProc("CredWriteW").Call(uintptr(unsafe.Pointer(&native)), 0)
-	if ok == 0 {
-		return fmt.Errorf("保存 Linux 登录凭据: %w", err)
-	}
-	return nil
+	return rdpauth.Write(target, login.username, login.password)
 }
 
-func deleteLogin(target string) error {
-	ok, _, err := credentialAPI.NewProc("CredDeleteW").Call(uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(target))), 1, 0)
-	if ok == 0 && !errors.Is(err, windows.ERROR_NOT_FOUND) {
-		return fmt.Errorf("忘记 Linux 登录凭据: %w", err)
-	}
-	return nil
-}
+func deleteLogin(target string) error { return rdpauth.Delete(target) }
 
 func promptLogin(hwnd uintptr, target, title string) (*loginCredential, error) {
 	info := struct {

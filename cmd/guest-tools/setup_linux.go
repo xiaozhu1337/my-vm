@@ -24,7 +24,7 @@ func installationResult(err error) {
 		fmt.Fprintln(os.Stderr, "增强安装失败:", err)
 		return
 	}
-	fmt.Println("安装完成。请保持桌面登录，关闭安装用窗口后在主机点击“打开画面”；GNOME 自动读取专用凭据，未知证书仍需确认。")
+	fmt.Println("安装完成。专用连接凭据已交由宿主管理器保存；请保持桌面登录，关闭安装用窗口后在主机点击“打开画面”，未知证书仍需确认。")
 }
 func installUser() error {
 	if os.Geteuid() == 0 {

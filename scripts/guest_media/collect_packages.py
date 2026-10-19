@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PROXY = 'http://192.168.1.99:7890'
 PACKAGES = ['gnome-remote-desktop', 'krdp', 'gvfs-backends', 'gvfs-fuse',
             'libglib2.0-bin', 'libsecret-tools', 'kmod', 'pkexec', 'polkitd', 'gnome-keyring',
-            'libkf6config-bin', 'xdg-desktop-portal', 'xdg-desktop-portal-kde']
+            'libkf6config-bin', 'kwallet6', 'xdg-desktop-portal', 'xdg-desktop-portal-kde']
 
 
 def docker_prefix():

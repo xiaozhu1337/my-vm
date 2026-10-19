@@ -136,7 +136,7 @@ func prepareLinux(media string) error {
 		if gpuPackages[name] && !gpuSupported() {
 			continue
 		}
-		if installDesktop == "gnome" && (name == "krdp" || name == "libkf6config-bin" || name == "xdg-desktop-portal-kde") {
+		if installDesktop == "gnome" && (name == "krdp" || name == "libkf6config-bin" || name == "kwallet6" || name == "xdg-desktop-portal-kde") {
 			continue
 		}
 		if installDesktop == "kde" && (name == "gnome-remote-desktop" || name == "gnome-keyring" || name == "libsecret-tools") {

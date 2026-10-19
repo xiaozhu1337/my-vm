@@ -22,7 +22,12 @@ func TestGNOMEManagedCredentialUsesStdin(t *testing.T) {
 	t.Setenv("MY_VM_TEST_SECRET", secret)
 	var previous string
 	for range 2 {
-		if err := configureGNOMELogin(); err != nil {
+		login, err := newDesktopLogin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer login.Clear()
+		if err := configureGNOMELogin(login); err != nil {
 			t.Fatal(err)
 		}
 		args, err := os.ReadFile(arguments)
@@ -38,7 +43,12 @@ func TestGNOMEManagedCredentialUsesStdin(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "grdctl"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := configureGNOMELogin(); err == nil || strings.Contains(err.Error(), previous) {
+	login, err := newDesktopLogin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer login.Clear()
+	if err := configureGNOMELogin(login); err == nil || strings.Contains(err.Error(), previous) {
 		t.Fatal("failed configuration was hidden or leaked the secret")
 	}
 }

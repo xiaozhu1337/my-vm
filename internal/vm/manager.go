@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"my-vm/internal/hcs"
+	"my-vm/internal/rdpauth"
 	"my-vm/internal/sharing"
 )
 
@@ -171,8 +172,18 @@ func (m *Manager) Start(_ string, machine Machine) error {
 		fmt.Fprintln(m.Log, "HCS RuntimeId:", runtimeID)
 	}
 	s := &session{system: system, endpoint: endpoint, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine}
-	if len(machine.Shares) > 0 {
-		s.shares, err = sharing.Start(s.runtimeID, machine.Shares, m.Log)
+	if len(machine.Shares) > 0 || machine.IsLinux() {
+		var saveLogin func(*rdpauth.Login) error
+		if machine.IsLinux() {
+			saveLogin = func(login *rdpauth.Login) error {
+				err := rdpauth.Save(`\\.\pipe\my-vm-`+machine.ID+".enhanced", login)
+				if err != nil && m.Log != nil {
+					fmt.Fprintln(m.Log, "保存增强登录凭据失败:", err)
+				}
+				return err
+			}
+		}
+		s.shares, err = sharing.Start(s.runtimeID, machine.Shares, m.Log, saveLogin)
 		if err != nil {
 			return fmt.Errorf("启动共享文件夹失败: %w", err)
 		}

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"my-vm/internal/sharing"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -102,5 +103,21 @@ func TestConfiguration(t *testing.T) {
 	}
 	if devices["VideoMonitor"] == nil || devices["EnhancedModeVideo"] == nil {
 		t.Fatal("console configuration missing")
+	}
+}
+
+func TestLinuxCredentialChannelWithoutSharedFolders(t *testing.T) {
+	machine := NewMachine()
+	machine.GuestOS = "linux"
+	machine.Shares = nil
+	cfg, err := Configuration(t.TempDir(), machine, "endpoint-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := cfg["VirtualMachine"].(map[string]any)["Devices"].(map[string]any)
+	services := devices["HvSocket"].(map[string]any)["HvSocketConfig"].(map[string]any)["ServiceTable"].(map[string]any)
+	service := services[sharing.ServiceGUID()].(map[string]any)
+	if service["AllowWildcardBinds"] != false {
+		t.Fatal("registration must use a VM-specific listener")
 	}
 }

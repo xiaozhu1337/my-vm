@@ -3,21 +3,22 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
+	"my-vm/internal/rdpauth"
+	"my-vm/internal/sharing"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -49,8 +50,13 @@ func installEnhancements() error {
 	if err != nil {
 		return err
 	}
+	login, err := newDesktopLogin()
+	if err != nil {
+		return err
+	}
+	defer login.Clear()
 	if kind == "kde" {
-		return configureKDE(root, cert, key)
+		return configureKDE(root, cert, key, login)
 	}
 	fmt.Println("GNOME 增强会话将新增远程虚拟显示器，分辨率随窗口调整；原主屏应用不保证自动迁移。")
 	// Display Control can resize GNOME's virtual monitor, but not a mirrored physical display.
@@ -64,25 +70,27 @@ func installEnhancements() error {
 			return err
 		}
 	}
-	if err = configureGNOMELogin(); err != nil {
+	if err = configureGNOMELogin(login); err != nil {
 		return err
 	}
 	if err = guestCommand("grdctl", "rdp", "enable"); err != nil {
 		return err
 	}
-	return guestCommand("systemctl", "--user", "enable", "--now", "gnome-remote-desktop.service")
-}
-
-func configureGNOMELogin() error {
-	var secret [32]byte
-	if _, err := rand.Read(secret[:]); err != nil {
+	if err = guestCommand("systemctl", "--user", "enable", "--now", "gnome-remote-desktop.service"); err != nil {
 		return err
 	}
-	defer clear(secret[:])
-	password := base64.RawURLEncoding.EncodeToString(secret[:])
-	command := exec.Command("grdctl", "rdp", "set-credentials", "myvm")
+	return sharing.PublishLogin(context.Background(), login)
+}
+
+func configureGNOMELogin(login *rdpauth.Login) error {
+	if err := login.Validate(); err != nil {
+		return err
+	}
+	command := exec.Command("grdctl", "rdp", "set-credentials", login.Username)
 	// One password line avoids grdctl's per-prompt buffered stdin; never pass secrets in argv.
-	command.Stdin = strings.NewReader(password + "\n")
+	input := append(append([]byte(nil), login.Password...), '\n')
+	defer clear(input)
+	command.Stdin = bytes.NewReader(input)
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("配置 GNOME 专用连接凭据失败，请确认当前桌面密钥环已解锁: %w", err)
 	}
@@ -125,15 +133,15 @@ func desktopCertificate(directory string) (string, string, error) {
 	return cert, key, nil
 }
 
-func configureKDE(root, cert, key string) error {
+func configureKDE(root, cert, key string, login *rdpauth.Login) error {
 	if _, err := exec.LookPath("krdpserver"); err != nil {
 		return err
 	}
-	current, err := user.Current()
+	err := configureKDELogin(login)
 	if err != nil {
 		return err
 	}
-	for _, item := range [][2]string{{"ListenPort", "43389"}, {"SystemUserEnabled", "true"}, {"Certificate", cert}, {"CertificateKey", key}} {
+	for _, item := range [][2]string{{"ListenPort", "43389"}, {"SystemUserEnabled", "false"}, {"Users", login.Username}, {"Certificate", cert}, {"CertificateKey", key}} {
 		if err = guestCommand("kwriteconfig6", "--file", "krdpserverrc", "--group", "General", "--key", item[0], item[1]); err != nil {
 			return err
 		}
@@ -142,7 +150,7 @@ func configureKDE(root, cert, key string) error {
 	if err = os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
-	override := "[Service]\nExecStart=\nExecStart=/usr/bin/krdpserver --address 127.0.0.1\n"
+	override := "[Service]\nEnvironment=QTKEYCHAIN_BACKEND=kwallet6\nExecStart=\nExecStart=/usr/bin/krdpserver --address 127.0.0.1\n"
 	if err = os.WriteFile(filepath.Join(directory, "my-vm.conf"), []byte(override), 0600); err != nil {
 		return err
 	}
@@ -160,6 +168,6 @@ func configureKDE(root, cert, key string) error {
 	if err = guestCommand("systemctl", "--user", "restart", "app-org.kde.krdpserver.service"); err != nil {
 		return err
 	}
-	fmt.Printf("KDE 增强桌面已配置；连接时使用当前系统账户 %s 及其密码。保持 Plasma 桌面已登录。\n", current.Username)
+	fmt.Println("KDE 增强桌面已配置独立连接凭据；无需 Linux 系统密码，请保持 Plasma 桌面已登录。")
 	return nil
 }

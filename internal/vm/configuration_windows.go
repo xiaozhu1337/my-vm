@@ -45,7 +45,7 @@ func Configuration(root string, m Machine, endpoint string) (map[string]any, err
 		}
 		devices["NetworkAdapters"] = map[string]any{endpoint: map[string]any{"EndpointId": endpoint}}
 	}
-	if len(m.Shares) > 0 {
+	if len(m.Shares) > 0 || m.IsLinux() {
 		devices["HvSocket"] = map[string]any{"HvSocketConfig": map[string]any{"ServiceTable": map[string]any{sharing.ServiceGUID(): map[string]any{"AllowWildcardBinds": false, "BindSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)", "ConnectSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}}}}
 	}
 	directory := filepath.Dir(DiskPath(root, m))
