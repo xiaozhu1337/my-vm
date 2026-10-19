@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"my-vm/internal/console/chrome"
 	"my-vm/internal/control"
 	"net/http"
 	"net/url"
@@ -25,6 +26,16 @@ const (
 	toolbarFullscreen
 	toolbarPause
 	toolbarShutdown
+	toolbarConfirm
+	toolbarCancel
+)
+
+type toolbarPrompt uint8
+
+const (
+	promptNone toolbarPrompt = iota
+	promptEnhanced
+	promptShutdown
 )
 
 type toolbarButton struct {
@@ -35,15 +46,21 @@ type toolbarButton struct {
 }
 
 type consoleToolbar struct {
-	buttons          []toolbarButton
-	ctx              context.Context
-	cancel           context.CancelFunc
-	results          chan toolbarResult
-	availability     enhancedAvailability
-	busy, fullscreen bool
-	notice           string
-	bounds           [4]int32
-	style            uintptr
+	buttons                     []toolbarButton
+	painter                     *chrome.Painter
+	confirmButton, cancelButton uintptr
+	prompt                      toolbarPrompt
+	promptStatus                string
+	promptError                 bool
+	noticeError                 bool
+	ctx                         context.Context
+	cancel                      context.CancelFunc
+	results                     chan toolbarResult
+	availability                enhancedAvailability
+	busy, fullscreen            bool
+	notice                      string
+	bounds                      [4]int32
+	style                       uintptr
 }
 
 type toolbarResult struct {
@@ -66,24 +83,38 @@ func machineIDFromPipe(pipe string) string {
 
 func (v *viewer) createToolbar() error {
 	ctx, cancel := context.WithCancel(context.Background())
-	v.toolbar = &consoleToolbar{ctx: ctx, cancel: cancel, results: make(chan toolbarResult, 1), buttons: []toolbarButton{
-		{id: toolbarBasic, label: "基础画面", width: 82},
-		{id: toolbarEnhanced, label: "增强画面", width: 82},
+	v.toolbar = &consoleToolbar{painter: &chrome.Painter{}, ctx: ctx, cancel: cancel, results: make(chan toolbarResult, 1), buttons: []toolbarButton{
+		{id: toolbarBasic, label: "基础", width: 60},
+		{id: toolbarEnhanced, label: "增强", width: 60},
 		{id: toolbarKeys, label: "Ctrl+Alt+Del", width: 112},
-		{id: toolbarFullscreen, label: "全屏 / 还原", width: 108},
-		{id: toolbarPause, label: "暂停 / 继续", width: 108},
-		{id: toolbarShutdown, label: "正常关机", width: 90},
+		{id: toolbarFullscreen, label: "全屏", width: 88},
+		{id: toolbarPause, label: "暂停 / 继续", width: 96},
+		{id: toolbarShutdown, label: "关机", width: 64},
 	}}
-	font, _, _ := windows.NewLazySystemDLL("gdi32.dll").NewProc("GetStockObject").Call(17)
 	for i := range v.toolbar.buttons {
 		button := &v.toolbar.buttons[i]
-		button.handle, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(button.label))), 0x50010000, 0, 0, 1, 1, v.hwnd, button.id, 0, 0)
+		button.handle, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(button.label))), 0x5001000b, 0, 0, 1, 1, v.hwnd, button.id, 0, 0)
 		if button.handle == 0 {
 			cancel()
 			return errors.New("创建客户机工具栏失败")
 		}
-		user32.NewProc("SendMessageW").Call(button.handle, 0x30, font, 1)
+		chrome.Track(button.handle)
 	}
+	for _, button := range []struct {
+		id     uintptr
+		target *uintptr
+		text   string
+	}{
+		{toolbarConfirm, &v.toolbar.confirmButton, "确认"}, {toolbarCancel, &v.toolbar.cancelButton, "暂不"},
+	} {
+		*button.target, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(button.text))), 0x4001000b, 0, 0, 1, 1, v.hwnd, button.id, 0, 0)
+		if *button.target == 0 {
+			cancel()
+			return errors.New("创建消息操作按钮失败")
+		}
+		chrome.Track(*button.target)
+	}
+	chrome.Track(v.headerClose)
 	return nil
 }
 
@@ -98,10 +129,14 @@ func (v *viewer) layoutToolbar(dpi uintptr) {
 	if v.toolbar == nil {
 		return
 	}
-	x, margin, height := int32(6*dpi/96), int32(6*dpi/96), int32(28*dpi/96)
+	v.toolbar.painter.Font(dpi)
+	x, margin, height := int32(12*dpi/96), int32(4*dpi/96), int32(28*dpi/96)
 	for _, button := range v.toolbar.buttons {
+		if button.id == toolbarKeys || button.id == toolbarPause {
+			x += int32(16 * dpi / 96)
+		}
 		width := button.width * int32(dpi) / 96
-		user32.NewProc("MoveWindow").Call(button.handle, uintptr(x), uintptr(margin), uintptr(width), uintptr(height), 1)
+		user32.NewProc("MoveWindow").Call(button.handle, uintptr(x), uintptr(6*dpi/96), uintptr(width), uintptr(height), 1)
 		x += width + margin
 		enabled := !v.toolbar.busy
 		switch button.id {
@@ -121,6 +156,7 @@ func (v *viewer) layoutToolbar(dpi uintptr) {
 			value = 1
 		}
 		user32.NewProc("EnableWindow").Call(button.handle, value)
+		user32.NewProc("InvalidateRect").Call(button.handle, 0, 0)
 	}
 }
 
@@ -128,12 +164,22 @@ func (v *viewer) toolbarCommand(id, source uintptr) bool {
 	if v.toolbar == nil || v.closed {
 		return false
 	}
+	bar := v.toolbar
+	if bar.prompt != promptNone && ((id == toolbarConfirm && source == bar.confirmButton && source != 0) || (id == toolbarCancel && source == bar.cancelButton && source != 0)) {
+		if !bar.busy {
+			v.finishPrompt(id == toolbarConfirm)
+		}
+		return true
+	}
 	for _, button := range v.toolbar.buttons {
 		if id != button.id || source != button.handle {
 			continue
 		}
 		if v.toolbar.busy && id != toolbarFullscreen {
 			return true
+		}
+		if id != toolbarFullscreen {
+			v.clearPrompt()
 		}
 		switch id {
 		case toolbarBasic:
@@ -155,10 +201,7 @@ func (v *viewer) toolbarCommand(id, source uintptr) bool {
 		case toolbarPause:
 			v.startToolbarAction("toggle-pause")
 		case toolbarShutdown:
-			answer, _, _ := user32.NewProc("MessageBoxW").Call(v.hwnd, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("正常关闭此虚拟机？请先保存客户机中的文件。"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("确认关机"))), 0x124)
-			if answer == 6 {
-				v.startToolbarAction("stop")
-			}
+			v.showPrompt(promptShutdown)
 		}
 		v.layout = displaySettings{}
 		v.resize()
@@ -185,8 +228,10 @@ func (v *viewer) startToolbarAction(action string) {
 		return
 	}
 	bar.busy = true
-	bar.notice = "客户机操作进行中"
+	bar.notice, bar.noticeError = "客户机操作进行中", false
+	v.revealHeader()
 	v.setStatus("正在执行客户机操作…")
+	v.resize()
 	hwnd, id := v.hwnd, v.machineID
 	go func() {
 		ctx, cancel := context.WithTimeout(bar.ctx, 130*time.Second)
@@ -262,6 +307,7 @@ func (v *viewer) finishToolbarAction() {
 	case result := <-v.toolbar.results:
 		v.toolbar.busy = false
 		v.toolbar.notice = result.status
+		v.toolbar.noticeError = result.err != nil
 		if result.err != nil {
 			v.toolbar.notice = result.err.Error()
 			v.toolbarError(result.err)
@@ -275,10 +321,163 @@ func (v *viewer) finishToolbarAction() {
 }
 
 func (v *viewer) toolbarError(err error) {
+	v.revealHeader()
 	v.fail(err)
-	if v.headerHidden {
-		user32.NewProc("MessageBoxW").Call(v.hwnd, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(err.Error()))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("客户机操作失败"))), 0x10)
+	v.layout = displaySettings{}
+	v.resize()
+}
+
+func (v *viewer) clearPrompt() {
+	if v.toolbar == nil || v.toolbar.prompt == promptNone {
+		return
 	}
+	v.toolbar.prompt = promptNone
+	v.status, v.statusError = v.toolbar.promptStatus, v.toolbar.promptError
+	v.toolbar.promptStatus, v.toolbar.promptError = "", false
+	v.renderStatus()
+	for _, handle := range []uintptr{v.toolbar.confirmButton, v.toolbar.cancelButton} {
+		if handle != 0 {
+			user32.NewProc("ShowWindow").Call(handle, 0)
+		}
+	}
+	v.layout = displaySettings{}
+}
+
+func (v *viewer) revealHeader() {
+	v.headerHidden = false
+	for _, handle := range []uintptr{v.header, v.headerClose} {
+		if handle != 0 {
+			user32.NewProc("ShowWindow").Call(handle, 5)
+		}
+	}
+	v.layout = displaySettings{}
+}
+
+func (p toolbarPrompt) labels() (string, string, string) {
+	switch p {
+	case promptEnhanced:
+		return "增强画面已就绪，可切换以使用更多桌面功能。", "切换增强", "暂不"
+	case promptShutdown:
+		return "正常关闭虚拟机？请先保存客户机中的文件。", "确认关机", "取消"
+	}
+	return "", "", ""
+}
+
+func (v *viewer) showPrompt(prompt toolbarPrompt) {
+	if v.closed || v.toolbar == nil {
+		return
+	}
+	if v.toolbar.prompt == promptNone {
+		v.toolbar.promptStatus, v.toolbar.promptError = v.status, v.statusError
+	}
+	v.toolbar.prompt = prompt
+	v.revealHeader()
+	v.setStatus("")
+	v.resize()
+	if prompt == promptShutdown && v.toolbar.cancelButton != 0 {
+		user32.NewProc("SetFocus").Call(v.toolbar.cancelButton)
+	}
+}
+
+func (v *viewer) finishPrompt(confirmed bool) {
+	if v.closed || v.toolbar == nil || v.toolbar.busy {
+		return
+	}
+	prompt := v.toolbar.prompt
+	v.dismissHeader()
+	if !confirmed {
+		return
+	}
+	switch prompt {
+	case promptEnhanced:
+		if !v.enhanced {
+			v.switchDisplay(true, true)
+		}
+	case promptShutdown:
+		v.startToolbarAction("stop")
+	}
+}
+
+func (v *viewer) layoutNotice(width, top, barHeight int32, dpi uintptr) {
+	unit := func(value int32) int32 { return value * int32(dpi) / 96 }
+	bar := v.toolbar
+	show := !v.headerHidden
+	x := width - unit(40)
+	user32.NewProc("MoveWindow").Call(v.headerClose, uintptr(x), uintptr(barHeight+unit(4)), uintptr(unit(24)), uintptr(unit(24)), 1)
+	if bar != nil {
+		_, confirm, cancel := bar.prompt.labels()
+		for _, button := range []struct {
+			window uintptr
+			text   string
+		}{{bar.cancelButton, cancel}, {bar.confirmButton, confirm}} {
+			visible := uintptr(0)
+			if show && bar.prompt != promptNone {
+				visible = 5
+				x -= unit(88)
+				user32.NewProc("SetWindowTextW").Call(button.window, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(button.text))))
+				user32.NewProc("MoveWindow").Call(button.window, uintptr(x), uintptr(barHeight+unit(2)), uintptr(unit(84)), uintptr(unit(28)), 1)
+			}
+			user32.NewProc("ShowWindow").Call(button.window, visible)
+			user32.NewProc("EnableWindow").Call(button.window, boolValue(!bar.busy))
+		}
+	}
+	if show {
+		user32.NewProc("MoveWindow").Call(v.header, uintptr(unit(12)), uintptr(barHeight+unit(2)), uintptr(max(x-unit(18), 1)), uintptr(top-barHeight-unit(4)), 1)
+	}
+}
+
+func boolValue(value bool) uintptr {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func (v *viewer) paintControl(address uintptr) bool {
+	if v.toolbar == nil || v.toolbar.painter == nil {
+		return false
+	}
+	item, ok := chrome.ReadItem(address)
+	if !ok {
+		return false
+	}
+	bar := v.toolbar
+	var style chrome.Button
+	if item.Window == v.header && item.Kind == 5 {
+		dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(v.hwnd)
+		bar.painter.Font(dpi)
+		bar.painter.Banner(item, v.status, v.statusError)
+		return true
+	}
+	if item.Kind != 4 {
+		return false
+	}
+	switch item.Window {
+	case v.headerClose:
+		style = chrome.Button{Close: true}
+	case bar.confirmButton:
+		_, text, _ := bar.prompt.labels()
+		style = chrome.Button{Text: text, Primary: true}
+	case bar.cancelButton:
+		_, _, text := bar.prompt.labels()
+		style = chrome.Button{Text: text}
+	default:
+		found := false
+		for _, button := range bar.buttons {
+			if item.Window == button.handle {
+				style = chrome.Button{Text: button.label, Selected: button.id == toolbarEnhanced && v.enhanced || button.id == toolbarBasic && !v.enhanced, Danger: button.id == toolbarShutdown}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(v.hwnd)
+	bar.painter.Font(dpi)
+	bar.painter.Button(item, style)
+	return true
 }
 
 func (v *viewer) toggleFullscreen() error {
@@ -307,5 +506,15 @@ func (v *viewer) toggleFullscreen() error {
 		user32.NewProc("SetWindowPos").Call(v.hwnd, 0, uintptr(bar.bounds[0]), uintptr(bar.bounds[1]), uintptr(bar.bounds[2]-bar.bounds[0]), uintptr(bar.bounds[3]-bar.bounds[1]), 0x24)
 	}
 	bar.fullscreen = !bar.fullscreen
+	for i := range bar.buttons {
+		if bar.buttons[i].id == toolbarFullscreen {
+			label := "全屏"
+			if bar.fullscreen {
+				label = "退出全屏"
+			}
+			bar.buttons[i].label = label
+			user32.NewProc("SetWindowTextW").Call(bar.buttons[i].handle, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(label))))
+		}
+	}
 	return nil
 }

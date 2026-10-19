@@ -26,7 +26,7 @@ const dismissHeaderCommand = 100
 
 type viewer struct {
 	hwnd, header, headerClose, child            uintptr
-	headerHidden                                bool
+	headerHidden, statusError                   bool
 	toolbar                                     *consoleToolbar
 	machineID, linuxMode                        string
 	client, advanced                            *ole.IDispatch
@@ -52,8 +52,17 @@ type viewer struct {
 
 var current *viewer
 
-func (v *viewer) fail(err error) { fmt.Fprintln(v.log, err); v.setStatus(err.Error()) }
+func (v *viewer) fail(err error) {
+	fmt.Fprintln(v.log, err)
+	v.clearPrompt()
+	v.setStatus(err.Error())
+	v.statusError = true
+	v.renderStatus()
+}
 func (v *viewer) setStatus(status string) {
+	if v.toolbar != nil && v.toolbar.prompt != promptNone {
+		status, _, _ = v.toolbar.prompt.labels()
+	}
 	if v.loginNotice != "" && strings.HasPrefix(status, "已连接") {
 		status += " · " + v.loginNotice
 	}
@@ -64,8 +73,14 @@ func (v *viewer) setStatus(status string) {
 		return
 	}
 	v.status = status
+	v.statusError = strings.Contains(status, "失败") || v.toolbar != nil && v.toolbar.noticeError && strings.Contains(status, v.toolbar.notice)
+	v.renderStatus()
+}
+
+func (v *viewer) renderStatus() {
 	if v.header != 0 {
-		user32.NewProc("SetWindowTextW").Call(v.header, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(status))))
+		user32.NewProc("SetWindowTextW").Call(v.header, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(v.status))))
+		user32.NewProc("InvalidateRect").Call(v.header, 0, 0)
 	}
 }
 
@@ -89,6 +104,20 @@ type windowClass struct {
 var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	v := current
 	switch msg {
+	case 0x2b:
+		if v != nil && v.paintControl(lparam) {
+			return 1
+		}
+	case 0x14:
+		if v != nil && v.toolbar != nil && v.toolbar.painter != nil {
+			v.toolbar.painter.Background(wparam, hwnd)
+			return 1
+		}
+	case 0x15, 0x1a, 0x31a:
+		if v != nil && v.toolbar != nil && v.toolbar.painter != nil {
+			v.toolbar.painter.SettingsChanged()
+			user32.NewProc("RedrawWindow").Call(hwnd, 0, 0, 0x85)
+		}
 	case 0x8002:
 		if v != nil && v.automatic && v.enhanced && !v.closed {
 			v.fallbackBasic()
@@ -141,11 +170,18 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 		return 0
 	case 0x2e0:
 		var rect [4]int32
+		if v != nil && v.toolbar != nil {
+			v.toolbar.painter.Font(wparam & 0xffff)
+		}
 		if err := windows.ReadProcessMemory(windows.CurrentProcess(), lparam, (*byte)(unsafe.Pointer(&rect)), unsafe.Sizeof(rect), nil); err == nil {
 			user32.NewProc("SetWindowPos").Call(hwnd, 0, uintptr(rect[0]), uintptr(rect[1]), uintptr(rect[2]-rect[0]), uintptr(rect[3]-rect[1]), 0x14)
 		}
 		return 0
 	case 0x111:
+		if v != nil && v.toolbar != nil && v.toolbar.prompt != promptNone && wparam == 2 && lparam == 0 {
+			v.finishPrompt(false)
+			return 0
+		}
 		if v != nil && v.toolbarCommand(wparam&0xffff, lparam) {
 			return 0
 		}
@@ -304,17 +340,15 @@ func Run(args []string, log io.Writer) error {
 	if v.hwnd == 0 {
 		return fmt.Errorf("创建控制台窗口失败")
 	}
-	v.header, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("STATIC"))), 0, 0x50000000, 12, 10, 1300, 32, v.hwnd, 0, 0, 0)
-	v.headerClose, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("X"))), 0x50010000, 0, 0, 24, 24, v.hwnd, dismissHeaderCommand, 0, 0)
+	v.header, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("STATIC"))), 0, 0x5000000d, 12, 10, 1300, 32, v.hwnd, 0, 0, 0)
+	v.headerClose, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("关闭提示"))), 0x5001000b, 0, 0, 24, 24, v.hwnd, dismissHeaderCommand, 0, 0)
 	if v.header == 0 || v.headerClose == 0 {
 		return fmt.Errorf("创建控制台提示栏失败")
 	}
-	font, _, _ := windows.NewLazySystemDLL("gdi32.dll").NewProc("GetStockObject").Call(17)
-	user32.NewProc("SendMessageW").Call(v.header, 0x30, font, 1)
-	user32.NewProc("SendMessageW").Call(v.headerClose, 0x30, font, 1)
 	if err := v.createToolbar(); err != nil {
 		return err
 	}
+	defer v.toolbar.painter.Close()
 	defer v.toolbar.cancel()
 	defer v.close()
 	v.setStatus(mode + " · 正在连接客户机…")
@@ -484,12 +518,7 @@ func (v *viewer) resize() {
 	if v.layout != settings {
 		barHeight := v.toolbarHeight(dpi)
 		v.layoutToolbar(dpi)
-		if !v.headerHidden {
-			button := int32(24 * dpi / 96)
-			margin := int32(8 * dpi / 96)
-			user32.NewProc("MoveWindow").Call(v.header, 12, uintptr(barHeight+8), uintptr(max(width-button-margin-24, 1)), uintptr(top-barHeight-8), 1)
-			user32.NewProc("MoveWindow").Call(v.headerClose, uintptr(max(width-button-margin, 0)), uintptr(barHeight+(top-barHeight-button)/2), uintptr(button), uintptr(button), 1)
-		}
+		v.layoutNotice(width, top, barHeight, dpi)
 		user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
 		v.layout = settings
 	}

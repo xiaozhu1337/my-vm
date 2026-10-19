@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"my-vm/internal/hcs"
@@ -136,7 +135,7 @@ func (v *viewer) enhancedAvailabilityResult() {
 	availability := &v.toolbar.availability
 	select {
 	case ready := <-availability.results:
-		if v.enhanced || v.toolbar.busy {
+		if v.enhanced || v.toolbar.busy || v.toolbar.prompt != promptNone {
 			availability.checking = false
 			return
 		}
@@ -146,8 +145,5 @@ func (v *viewer) enhancedAvailabilityResult() {
 	default:
 		return
 	}
-	answer, _, _ := user32.NewProc("MessageBoxW").Call(v.hwnd, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("增强画面现已可用，可使用增强桌面的显示与集成功能。是否立即切换？\n\n选择“否”会保留当前基础画面，也可稍后使用顶部工具栏切换。"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("增强画面已就绪"))), 0x124)
-	if answer == 6 && !v.closed && !v.enhanced {
-		v.switchDisplay(true, true)
-	}
+	v.showPrompt(promptEnhanced)
 }

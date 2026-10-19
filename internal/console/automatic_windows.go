@@ -217,6 +217,7 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 	}
 	hwnd, header, headerClose := v.hwnd, v.header, v.headerClose
 	headerHidden, toolbar := v.headerHidden, v.toolbar
+	v.clearPrompt()
 	pipe, runtimeID, title, log := basicDisplayPipe(v.pipe), v.vmid, v.title, v.log
 	linux, clipboard, linuxMode, machineID := v.linux, v.clipboard, v.linuxMode, v.machineID
 	v.close()

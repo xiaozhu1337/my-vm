@@ -28,6 +28,7 @@ func (v *viewer) dismissHeader() {
 		return
 	}
 	v.headerHidden = true
+	v.clearPrompt()
 	for _, handle := range []uintptr{v.header, v.headerClose} {
 		if handle != 0 {
 			user32.NewProc("ShowWindow").Call(handle, 0)

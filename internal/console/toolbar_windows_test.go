@@ -194,6 +194,81 @@ func TestEnhancedAvailabilityProbeIsBoundedAndConservative(t *testing.T) {
 	}
 }
 
+func TestInlineNoticesRequireAUserDecision(t *testing.T) {
+	bar := &consoleToolbar{availability: enhancedAvailability{checking: true, results: make(chan bool, 1)}}
+	v := &viewer{toolbar: bar, headerHidden: true, log: io.Discard}
+	bar.availability.results <- true
+	v.enhancedAvailabilityResult()
+	if v.enhanced || bar.busy || bar.prompt != promptEnhanced || v.headerHidden || !bar.availability.notified {
+		t.Fatal("readiness switched the display or failed to show a notice")
+	}
+	v.setStatus("已连接")
+	if !strings.Contains(v.status, "增强画面已就绪") {
+		t.Fatal("the connection timer overwrote an unanswered offer")
+	}
+	if v.toolbarCommand(toolbarConfirm, 0) {
+		t.Fatal("an untrusted command without a source control was accepted")
+	}
+	v.finishPrompt(false)
+	if v.enhanced || bar.prompt != promptNone || !v.headerHidden {
+		t.Fatal("declining an offer changed the display")
+	}
+
+	bar.buttons = []toolbarButton{{id: toolbarShutdown, handle: 501}}
+	if !v.toolbarCommand(toolbarShutdown, 501) || bar.prompt != promptShutdown || bar.busy || v.headerHidden {
+		t.Fatal("pressing shutdown started an operation before confirmation")
+	}
+	v.setStatus("已连接")
+	if !strings.Contains(v.status, "请先保存") {
+		t.Fatal("the shutdown warning was overwritten")
+	}
+	v.finishPrompt(false)
+	if bar.busy || bar.prompt != promptNone {
+		t.Fatal("cancelling shutdown started an operation")
+	}
+
+	v.showPrompt(promptShutdown)
+	bar.availability = enhancedAvailability{checking: true, results: make(chan bool, 1)}
+	bar.availability.results <- true
+	v.enhancedAvailabilityResult()
+	if bar.prompt != promptShutdown || bar.availability.notified {
+		t.Fatal("a readiness result replaced a user confirmation")
+	}
+	v.fail(errors.New("connection failed"))
+	if bar.prompt != promptNone || !v.statusError || !strings.Contains(v.status, "connection failed") {
+		t.Fatal("a real failure was hidden behind a notice")
+	}
+}
+
+func TestClearingPromptRestoresPreviousMessage(t *testing.T) {
+	for _, original := range []string{"已连接 · 关闭控制台后虚拟机继续运行", "已连接 · 虚拟机已恢复运行", "connection failed"} {
+		v := &viewer{status: original, statusError: original == "connection failed", log: io.Discard, toolbar: &consoleToolbar{}}
+		v.showPrompt(promptShutdown)
+		v.setStatus("已连接")
+		v.clearPrompt()
+		if v.status != original || v.statusError != (original == "connection failed") || v.toolbar.prompt != promptNone {
+			t.Fatal("cancelling a prompt left stale or duplicate text", v.status)
+		}
+		v.clearPrompt()
+		if v.status != original {
+			t.Fatal("repeated cleanup erased the restored message")
+		}
+	}
+}
+
+func TestToolbarErrorsRevealDismissedMessageBar(t *testing.T) {
+	v := &viewer{headerHidden: true, log: io.Discard, toolbar: &consoleToolbar{busy: true, results: make(chan toolbarResult, 1)}}
+	v.toolbar.results <- toolbarResult{err: errors.New("manager unavailable")}
+	v.finishToolbarAction()
+	if v.headerHidden || !v.statusError || v.toolbar.busy {
+		t.Fatal("a failed operation was hidden")
+	}
+	v.setStatus("已连接")
+	if !v.statusError || !strings.Contains(v.status, "manager unavailable") {
+		t.Fatal("connection refresh hid the error state")
+	}
+}
+
 func TestToolbarClosedWindowIgnoresLateResult(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	v := &viewer{closed: true, toolbar: &consoleToolbar{ctx: ctx, cancel: cancel, results: make(chan toolbarResult, 1)}}
