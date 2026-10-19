@@ -15,7 +15,7 @@ Windows 原生虚拟机管理器。管理界面使用 [MyGo](https://github.com/
 - Windows 10、Windows 11、Ubuntu 26 及其他 Windows/Linux 系统配置；已有清单保持兼容。
 - 基础控制台用于固件和安装；增强会话提供窗口分辨率调整和剪贴板。
 - Linux 支持 GNOME 和 KDE Plasma 的 Wayland 当前桌面共享，也保留 X11/xrdp；窗口画面自动缩放，客户机分辨率调整与剪贴板格式由原生服务决定。
-- 离线增强 ISO 内置 Ubuntu/Kubuntu 26.04、26.10 amd64 的依赖、证书与服务配置，以及 Windows 宿主匹配 GPU-PV 驱动包；详情页“安装增强能力”支持运行中插入光盘。
+- Windows 与 Linux 使用独立离线增强 ISO；Linux 盘内置 Ubuntu/Kubuntu 26.04、26.10 amd64 的依赖、证书与服务配置，Windows 盘包含安装器与宿主匹配 GPU-PV 驱动。详情页“安装增强能力”按客户机系统选择，支持运行中插入光盘。
 - 增强会话的文本、图片、文件复制粘贴能力取决于客户机服务；不会同时重定向宿主整盘。
 - 选择主机文件夹映射，默认只读，可单独允许写入；Windows 自动分配空闲盘符，Linux 在文件管理器中挂载。
 - 内存按需分配与运行中热调整；与 NanaBox 同路径的 HCS GPU-PV 共享开关。
@@ -40,10 +40,11 @@ python -X utf8 "scripts/build.py"
 ```text
 dist\my-vm.exe
 dist\my-vm-cli.exe
-dist\my-vm-guest-tools.iso
+dist\my-vm-guest-tools-windows.iso
+dist\my-vm-guest-tools-linux.iso
 ```
 
-不再需要安装 QEMU 或下载 virtio 驱动。工具 ISO 包含双平台客户机程序和完整离线依赖。首次构建需联网收集 Ubuntu 软件包，使用 WSL 中的 Docker 解析闭合依赖；软件包和官方镜像由构建脚本通过代理下载，客户机安装只使用光盘内仓库。后续构建校验并复用 `dist\guest-payload` 缓存；不向客户机回退到联网安装。GPU-PV 载荷还需当前已验证宿主的匹配驱动文件，细节见 GPU 文档。
+不再需要安装 QEMU 或下载 virtio 驱动。Windows 和 Linux 工具 ISO 分别包含各自的客户机程序和离线载荷，不共用安装光盘。首次构建需联网收集 Ubuntu 软件包，使用 WSL 中的 Docker 解析闭合依赖；软件包和官方镜像由构建脚本通过代理下载，客户机安装只使用光盘内仓库。后续构建校验并复用 `dist\guest-payload` 缓存；不向客户机回退到联网安装。GPU-PV 载荷还需当前已验证宿主的匹配驱动文件，细节见 GPU 文档。
 
 重新构建前关闭正在使用旧 EXE/工具光盘的程序和虚拟机。构建脚本使用 Go 工具 `go-winres` 生成 EXE 图标资源；图标源文件和无第三方 Python 依赖的生成脚本随项目保存，管理器与控制台窗口也使用同一图标。
 
@@ -52,8 +53,10 @@ dist\my-vm-guest-tools.iso
 1. 退出仍在运行的旧版本，以管理员身份打开 `dist\my-vm.exe`，新建虚拟机，选择客户机类型和安装 ISO。
 2. 设置 CPU、内存、磁盘及网络，创建并启动。Windows 安装光盘出现按键启动提示时及时按键；错过后可重启虚拟机。
 3. 完成系统安装后关机，卸载安装 ISO。HCS 使用 Hyper-V 自带的存储、网络和显示设备。
-4. 点击详情页“安装增强能力”插入增强盘，Windows 在光盘内双击 `install.exe`；Ubuntu/Kubuntu 在已登录的 GNOME/KDE Wayland 桌面运行光盘内 `install.py`。安装器完成离线依赖、远程桌面证书与服务、共享目录代理和用户自启动配置。
+4. 点击详情页“安装增强能力”，程序按客户机类型插入 Windows 或 Linux 增强盘。Windows 在光盘内双击 `install.exe`；Ubuntu/Kubuntu 在已登录的 GNOME/KDE Wayland 桌面运行光盘内 `install.py`。安装器完成离线依赖、远程桌面证书与服务、共享目录代理和用户自启动配置。
 5. 需要主机文件夹时，在关机编辑页添加目录并选择只读/可写。安装后点击“增强会话”；基础控制台仍可用于安装及故障恢复。
+
+旧清单已挂载的合并增强 ISO 保持原路径，升级时保留旧文件。需要切换时，重新点击“安装增强能力”或在关机编辑页挂载工具光盘，程序会选择对应系统的新光盘。
 
 NAT 自动选网使用 Windows 保留标识对应的 `Default Switch`，不会把 WSL 的其他 ICS 网络当作默认交换机。Default Switch 提供 DHCP；找不到时明确报错。显式指定交换机时由该网络提供 DHCP 或客户机配置静态地址。若旧版本已接入 WSL 交换机，请正常关闭客户机并用新版重新启动，让网卡重新接入正确网络；无需重装系统。
 

@@ -10,12 +10,16 @@ import (
 	"path/filepath"
 )
 
-func enhancementDisc() (string, error) {
+func enhancementDisc(machine vm.Machine) (string, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
-	target := filepath.Join(filepath.Dir(executable), "my-vm-guest-tools.iso")
+	platform := "windows"
+	if machine.IsLinux() {
+		platform = "linux"
+	}
+	target := filepath.Join(filepath.Dir(executable), "my-vm-guest-tools-"+platform+".iso")
 	info, err := os.Stat(target)
 	if err != nil {
 		return "", fmt.Errorf("增强光盘不可用，请先运行构建脚本: %w", err)
@@ -34,7 +38,7 @@ func (a *application) installEnhancements(machine vm.Machine) {
 	running := a.manager.State(machine.ID) != "已关机"
 	a.runConfig(machine.ID, "插入增强光盘「"+machine.Name+"」", func() error {
 		var err error
-		target, err = enhancementDisc()
+		target, err = enhancementDisc(machine)
 		if err != nil {
 			return err
 		}
@@ -51,7 +55,10 @@ func (a *application) installEnhancements(machine vm.Machine) {
 		}
 		return errors.New("虚拟机不在当前配置中")
 	}, func() {
-		a.message = "增强光盘已插入：Windows 双击 install.exe；Ubuntu/Kubuntu 在桌面终端运行光盘内的 install.py。"
+		a.message = "Windows 增强光盘已插入，请在光盘中双击 install.exe。"
+		if machine.IsLinux() {
+			a.message = "Linux 增强光盘已插入，请在桌面终端运行光盘内的 install.py。"
+		}
 		if !running {
 			a.message = "已配置增强光盘，启动虚拟机后运行光盘中的安装程序。"
 		}

@@ -57,11 +57,12 @@ func (a *application) shareEditor(c *ui.Context) {
 		}
 		muted(c, "共享名称使用英文字母开头，可包含字母、数字、下划线和连字符。Windows 自动分配空闲盘符；Linux 在文件管理器中显示共享目录。")
 		if button(c, "挂载客户机工具光盘", true) {
-			id, version := a.draft.ID, a.editVersion
+			machine := a.draft
+			id, version := machine.ID, a.editVersion
 			var target string
 			a.run(id, "读取增强光盘", func() error {
 				var err error
-				target, err = enhancementDisc()
+				target, err = enhancementDisc(machine)
 				return err
 			}, func() {
 				if a.page == "edit" && a.draft.ID == id && a.editVersion == version {
@@ -75,6 +76,6 @@ func (a *application) shareEditor(c *ui.Context) {
 				a.draft.DriverISO = ""
 			}
 		}
-		muted(c, "工具光盘同时提供 Windows 和 Linux 安装程序；安装后才会出现共享目录。可写目录中的修改会直接作用于主机文件。")
+		muted(c, "工具光盘按客户机系统选择对应的 Windows 或 Linux 版本；安装后才会出现共享目录。可写目录中的修改会直接作用于主机文件。")
 	})
 }
