@@ -1,3 +1,5 @@
 /dist/
 /__tmp/
 /logs/
+/cmd/my-vm/rsrc_windows_amd64.syso
+/scripts/__pycache__/

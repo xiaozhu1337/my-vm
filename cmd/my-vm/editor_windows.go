@@ -5,6 +5,7 @@ package main
 import (
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
+	"my-vm/internal/vm"
 )
 
 func field(c *ui.Context, label string, value *string) {
@@ -39,7 +40,16 @@ func (a *application) editor(c *ui.Context) {
 	scrollBody(c, "editor-"+a.draft.ID, func() {
 		card(c, "基本信息", "使用容易辨认的名称来管理不同的工作环境。", func() {
 			field(c, "虚拟机名称", &a.draft.Name)
-			choice(c, "客户机系统", &a.draft.GuestOS, []string{"windows", "linux"}, map[string]string{"windows": "Windows", "linux": "Linux"})
+			options, labels := make([]string, 0, len(vm.GuestSystems)), map[string]string{}
+			for _, system := range vm.GuestSystems {
+				options = append(options, system.ID)
+				labels[system.ID] = system.Name
+			}
+			previous := a.draft.GuestOS
+			choice(c, "客户机系统", &a.draft.GuestOS, options, labels)
+			if a.draft.GuestOS != previous && !a.draft.IsLinux() {
+				a.draft.LinuxDesktop = ""
+			}
 		})
 		card(c, "硬件资源", "资源分配影响客户机性能，请为 Windows 主机保留足够的 CPU 与内存。", func() {
 			ui.Row(c).FillWidth().Gap(20).Children(func() {
@@ -87,7 +97,16 @@ func (a *application) editor(c *ui.Context) {
 			})
 		})
 		card(c, "显示与共享", "基础控制台用于固件和系统安装；增强会话使用本地 RDP 通道提供高清桌面与剪贴板。", func() {
-			muted(c, "Windows 10/11 已包含 Hyper-V 显示、存储与网络驱动，不再需要 virtio 驱动光盘。增强会话需要客户机启用远程桌面服务。")
+			if a.draft.IsLinux() {
+				desktop := a.draft.DesktopMode()
+				choice(c, "Linux 桌面会话", &desktop, []string{"wayland", "x11"}, map[string]string{"wayland": "Wayland / GNOME Remote Desktop", "x11": "X11 / xrdp"})
+				if desktop != a.draft.DesktopMode() {
+					a.draft.LinuxDesktop = desktop
+				}
+				muted(c, "Wayland 使用 GNOME 原生远程桌面，可共享当前桌面、传递剪贴板并缩放画面；需先在客户机配置服务。")
+			} else {
+				muted(c, "Windows 10/11 已包含 Hyper-V 显示、存储与网络驱动。增强会话需要客户机启用远程桌面服务。")
+			}
 			label := "剪贴板共享：关闭"
 			if a.draft.Clipboard {
 				label = "剪贴板共享：开启"
@@ -95,7 +114,7 @@ func (a *application) editor(c *ui.Context) {
 			if button(c, label, true) {
 				a.draft.Clipboard = !a.draft.Clipboard
 			}
-			muted(c, "增强会话允许文本、图片与文件复制粘贴；实际可用格式受客户机策略和应用支持限制。")
+			muted(c, "增强会话的文字、图片与文件粘贴能力取决于客户机服务和应用；共享文件夹也可独立使用。")
 		})
 		if a.cloneSource != nil {
 			muted(c, "副本保留客户机的账户、主机名和系统身份。首次启动建议保持断网，准备好客户机身份后再联网。")

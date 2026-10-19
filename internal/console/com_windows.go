@@ -31,6 +31,24 @@ func createRuntime(context *ole.IUnknown, class, iface string) (*ole.IUnknown, e
 	}
 	return result, nil
 }
+func (v *viewer) initializePipe() error {
+	var err error
+	v.context, err = createRuntime(nil, "{FB332AE7-0055-4208-92B7-20410CA8382B}", "{FB332AE7-000E-4208-92B7-20410CA8382B}")
+	if err != nil {
+		return err
+	}
+	if err = call(v.context, 12); err != nil {
+		return err
+	}
+	v.connector, err = createRuntime(v.context, "{FB332AE7-0088-4208-92B7-20410CA8382B}", "{4ACF942D-EADC-45BF-8EA8-793FE3CE31E8}")
+	if err != nil {
+		return err
+	}
+	v.callback = &connectorCallback{table: &callbackTable, viewer: v}
+	v.callback.refs.Store(1)
+	return call(v.connector, 3, uintptr(unsafe.Pointer(v.callback)))
+}
+
 func put(object *ole.IDispatch, name string, value any) error {
 	result, err := oleutil.PutProperty(object, name, value)
 	if result != nil {

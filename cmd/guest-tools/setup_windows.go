@@ -3,8 +3,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +20,8 @@ import (
 )
 
 var mpr = windows.NewLazySystemDLL("mpr.dll")
+
+func runDesktop(context.Context, io.Writer) {}
 
 func installUser() error {
 	root, err := os.UserConfigDir()

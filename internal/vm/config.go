@@ -19,6 +19,7 @@ import (
 
 type Machine struct {
 	GuestOS       string  `yaml:"guest_os"`
+	LinuxDesktop  string  `yaml:"linux_desktop,omitempty"`
 	DynamicMemory bool    `yaml:"dynamic_memory"`
 	GPUShared     bool    `yaml:"gpu_shared"`
 	Backend       string  `yaml:"backend"`
@@ -55,10 +56,11 @@ func NewMachine() Machine {
 	if _, err := rand.Read(id[:]); err != nil {
 		panic(err)
 	}
-	return Machine{ID: hex.EncodeToString(id[:]), Backend: "hcs", GuestOS: "windows", DynamicMemory: true, Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, DiskGiB: 64, Network: "nat", Clipboard: true}
+	return Machine{ID: hex.EncodeToString(id[:]), Backend: "hcs", GuestOS: "windows10", DynamicMemory: true, Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, DiskGiB: 64, Network: "nat", Clipboard: true}
 }
 
 func (m Machine) Validate() error {
+	_, knownGuest := m.guestSystem()
 	switch {
 	case !validID.MatchString(m.ID):
 		return errors.New("虚拟机 ID 无效")
@@ -72,8 +74,10 @@ func (m Machine) Validate() error {
 		return errors.New("磁盘需要在 1 到 65536 GiB 之间")
 	case m.Network != "nat" && m.Network != "bridge" && (m.Network != "none" || m.Backend != "hcs"):
 		return errors.New("网络模式必须为 nat、bridge 或 HCS 的 none（断开网络）")
-	case m.GuestOS != "" && m.GuestOS != "windows" && m.GuestOS != "linux":
-		return errors.New("客户机系统必须为 windows 或 linux")
+	case !knownGuest:
+		return errors.New("客户机系统必须为 windows10、windows11、ubuntu26、windows 或 linux")
+	case m.LinuxDesktop != "" && (m.LinuxDesktop != "wayland" && m.LinuxDesktop != "x11" || !m.IsLinux()):
+		return errors.New("Linux 桌面模式必须为 wayland 或 x11，且仅适用于 Linux 客户机")
 	case m.Backend != "" && m.Backend != "qemu" && m.Backend != "hcs":
 		return errors.New("虚拟机后端无效")
 	case m.Backend == "hcs" && m.Network == "bridge" && m.SwitchID == "":
@@ -127,12 +131,13 @@ func Save(path string, cfg Config) error {
 		return err
 	}
 	comments := map[string]string{
-		"guest_os":       "客户机类型：windows 或 linux；Linux 的增强会话需自行安装并配置 xrdp/vsock。",
+		"guest_os":       "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
+		"linux_desktop":  "Linux 增强会话：wayland 使用 GNOME Remote Desktop，x11 使用 xrdp；Ubuntu 26 默认 wayland，旧 linux 默认 x11。",
 		"dynamic_memory": "允许 HCS 按需分配内存及运行中修改内存；实际回收能力取决于客户机集成驱动。",
 		"gpu_shared":     "启用 Hyper-V GPU 分区共享；需要兼容主机和客户机驱动，不保证显卡支持。",
 		"backend":        "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",
 		"switch_id":      "HCN 交换机 GUID；NAT 留空时选择系统 ICS 默认交换机，桥接须指定现有外部交换机。",
-		"clipboard":      "在增强会话中允许剪贴板重定向（文本、图片和文件）。",
+		"clipboard":      "允许增强会话的剪贴板重定向；可用格式由客户机远程桌面服务决定。",
 		"shares":         "映射到客户机的主机文件夹；默认只读。",
 		"path":           "主机文件夹的绝对路径。", "read_only": "true 只允许读取，false 允许修改主机文件。",
 		"qemu_dir": "旧版本的 QEMU 目录，仅为兼容读取保留，HCS 不使用。",

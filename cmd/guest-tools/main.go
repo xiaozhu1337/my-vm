@@ -33,6 +33,7 @@ func main() {
 	} else {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
+		go runDesktop(ctx, logger)
 		err = sharing.RunProxy(ctx, logger, mapShares)
 	}
 	if err != nil {

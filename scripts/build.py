@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import subprocess
 
+from build_icon import main as build_icon
+
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / 'dist'
 STAGE = ROOT / '__tmp' / 'release-media'
@@ -15,6 +17,12 @@ def run(*args, env=None):
 
 def main():
     DIST.mkdir(exist_ok=True)
+    build_icon()
+    run('mise', 'exec', 'go@1.27.2', '--', 'go', 'run',
+        'github.com/tc-hib/go-winres@v0.3.3', 'simply', '--arch', 'amd64',
+        '--manifest', 'none', '--icon', str(ROOT / 'assets' / 'my-vm.ico'),
+        '--out', str(ROOT / 'cmd' / 'my-vm' / 'rsrc'),
+        env=dict(os.environ, HTTP_PROXY='http://192.168.1.99:7890', HTTPS_PROXY='http://192.168.1.99:7890'))
     STAGE.mkdir(parents=True, exist_ok=True)
     names = ['my-vm-guest.exe', 'my-vm-guest-linux-amd64', 'README.txt']
     try:

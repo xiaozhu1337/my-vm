@@ -82,8 +82,11 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 	if enhanced {
 		args = append(args, "--enhanced")
 	}
-	if enhanced && s.machine.GuestOS == "linux" {
+	if enhanced && s.machine.IsLinux() {
 		args = append(args, "--linux")
+		if s.machine.DesktopMode() == "wayland" {
+			args = append(args, "--wayland")
+		}
 	}
 	if enhanced && s.machine.Clipboard {
 		args = append(args, "--clipboard")

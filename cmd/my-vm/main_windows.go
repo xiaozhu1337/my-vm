@@ -9,6 +9,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/oneo-me/onevra/source/shells/plain"
+	"my-vm/assets"
 	"my-vm/internal/console"
 	"my-vm/internal/logging"
 	"my-vm/internal/media"
@@ -84,6 +85,9 @@ func main() {
 	mygo.App.WhenReady(func() {
 		shell := plain.NewShell(plain.ShellOptions{Title: "My VM · Windows 虚拟机管理器", Width: 1240, Height: 860, MinWidth: 1040, MinHeight: 700, Theme: appTheme, Content: a.view})
 		a.window = shell.Window()
+		if err := a.window.SetIcon(assets.Icon); err != nil {
+			a.report(err)
+		}
 		a.window.OnClose(func(e *mygo.CloseEvent) {
 			if a.busy || a.diskJob != nil || a.manager.Active() {
 				e.PreventDefault()

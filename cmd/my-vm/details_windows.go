@@ -67,6 +67,7 @@ func (a *application) details(c *ui.Context) {
 		})
 		a.memoryCard(c, m, state)
 		card(c, "设备与连接", "启动前可在编辑配置中调整设备。", func() {
+			infoRow(c, "客户机系统", m.GuestName())
 			infoRow(c, "虚拟化引擎", "Hyper-V HCS")
 			network := "NAT / 共享主机网络"
 			if m.Network == "none" {

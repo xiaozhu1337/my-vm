@@ -9,8 +9,11 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
+	"my-vm/assets"
 	"my-vm/internal/vm"
 )
+
+var projectIcon, projectIconError = ui.DecodeBitmap(assets.Icon)
 
 func (a *application) view(c *ui.Context) {
 	ui.Column(c).Fill().Children(func() {
@@ -35,9 +38,9 @@ func (a *application) sidebar(c *ui.Context) {
 	ui.Column(c).Width(256).Shrink(0).FillHeight().Gap(18).Padding(22, 16).
 		Background(c.Theme().Surface).Border(1, c.Theme().Border).BorderWidth(0, 1, 0, 0).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Padding(0, 6, 8).Children(func() {
-			ui.Box(c).Padding(10).Radius(11).Background(c.Theme().Accent).TextColor(c.Theme().AccentText).Children(func() {
-				components.Text(c, "VM").FontWeight(700).FontSize(17)
-			})
+			if projectIconError == nil {
+				ui.Image(c, projectIcon).Width(44).Height(44).Label("My VM")
+			}
 			ui.Column(c).Gap(3).Children(func() {
 				components.Text(c, "My VM").FontSize(22).FontWeight(600)
 				muted(c, "Windows 虚拟机工作台")

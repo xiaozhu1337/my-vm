@@ -1,5 +1,7 @@
 # My VM
 
+<img src="assets/my-vm.png" alt="My VM 图标" width="72">
+
 Windows 原生虚拟机管理器。管理界面使用 [MyGo](https://github.com/egoist/mygo) 和 [Onevra](https://github.com/oneo-me/onevra)，虚拟机后端为 Hyper-V Host Compute Service（HCS），控制台使用 Windows 原生 RDP ActiveX。仅实现 Windows x64 主机版本，可运行 Windows 与 Linux 客户机。
 
 当前版本已经从 QEMU 迁移至 HCS，只使用硬件虚拟化。旧 QEMU/qcow2 清单和磁盘会保留，但无法直接启动，也不会自动转换、覆盖或删除。
@@ -10,8 +12,10 @@ Windows 原生虚拟机管理器。管理界面使用 [MyGo](https://github.com/
 - UEFI、动态 VHDX、安装光盘和客户机工具光盘；启停、暂停、继续、正常关机及强制断电。
 - Hyper-V 默认交换机 NAT、桥接，或不连接网络的隔离模式。
 - 关机后复制已安装的 Windows/Linux，独立虚拟机和磁盘标识，默认断网并清除主机目录映射。
+- Windows 10、Windows 11、Ubuntu 26 及其他 Windows/Linux 系统配置；已有清单保持兼容。
 - 基础控制台用于固件和安装；增强会话提供窗口分辨率调整和剪贴板。
-- 增强会话的文本、图片、文件复制粘贴；不会同时重定向宿主整盘。
+- Linux 支持 GNOME/Wayland 当前桌面共享，也保留 X11/xrdp；窗口画面自动缩放，分辨率调整由客户机服务决定。
+- 增强会话的文本、图片、文件复制粘贴能力取决于客户机服务；不会同时重定向宿主整盘。
 - 选择主机文件夹映射，默认只读，可单独允许写入；Windows 自动分配空闲盘符，Linux 在文件管理器中挂载。
 - 内存按需分配与运行中热调整；GPU 分区共享开关。
 - 关机状态的完整 VHDX 磁盘快照，创建、恢复、删除及分页查看；复制和快照显示后台进度，可继续管理其他虚拟机。
@@ -36,7 +40,7 @@ dist\my-vm.exe
 dist\my-vm-guest-tools.iso
 ```
 
-不再需要安装 QEMU 或下载 virtio 驱动。工具 ISO 包含 Windows 和 Linux x64 客户机程序。重新构建前关闭正在使用旧 EXE/工具光盘的程序和虚拟机。
+不再需要安装 QEMU 或下载 virtio 驱动。工具 ISO 包含 Windows 和 Linux x64 客户机程序。重新构建前关闭正在使用旧 EXE/工具光盘的程序和虚拟机。构建脚本使用 Go 工具 `go-winres` 生成 EXE 图标资源；图标源文件和无第三方 Python 依赖的生成脚本随项目保存，管理器与控制台窗口也使用同一图标。
 
 ## 使用
 
@@ -46,13 +50,17 @@ dist\my-vm-guest-tools.iso
 4. 需要共享目录时，在关机状态添加主机文件夹并选择只读/可写，点击“挂载客户机工具光盘”，保存并启动，在客户机安装工具。
 5. 需要高清桌面和剪贴板时，准备客户机的增强会话服务，再点击“增强会话”。基础控制台仍可随时用于安装及故障恢复。
 
-完整客户机准备步骤见 [guest-setup.md](docs/guest-setup.md)。GPU 的实际通过环境及可复现步骤见 [linux-gpu.md](docs/linux-gpu.md)，验证范围见 [validation.md](docs/validation.md)。
+完整客户机准备步骤见 [guest-setup.md](docs/guest-setup.md)。Ubuntu 26 新配置默认使用 Wayland；需要先在客户机登录 GNOME，启用“桌面共享”和远程控制，并安装新版客户机工具。连接时在原生 RDP 窗口输入 GNOME 远程桌面的凭据，密码不写入清单。旧的 `guest_os: linux` 继续使用 X11/xrdp，可在编辑页切换；细分系统类型只记录配置，不会修改或重新安装现有客户机，也不会自动补装 Windows 11 TPM 等硬件要求。
+
+GPU 的实际通过环境及可复现步骤见 [linux-gpu.md](docs/linux-gpu.md)，验证范围见 [validation.md](docs/validation.md)。
 
 已有安装可以直接复用，不需要每轮测试重新安装。关机后点击“复制虚拟机”，确认副本配置并创建：副本保留系统磁盘和 UEFI 固件状态，使用新的虚拟机 ID 和 VHDX 容器 ID，不继承快照及运行状态，也不再挂载原来的安装光盘。原机及其安装保留。
 
 副本内部的账户、主机名、静态 IP、Windows SID 或 Linux machine-id 仍来自原机；复制不能替代客户机系统封装。默认关闭副本网络并清除主机共享目录，联网前按客户机用途准备系统身份，例如 Windows Sysprep 或 Linux machine-id/主机名配置。若在副本编辑页主动开启网络或添加共享目录，首次启动就会按所选配置连接。
 
 共享目录使用绑定到该虚拟机 RuntimeId 的 Hyper-V Socket 私有通道，宿主不开放 TCP 文件共享端口。客户机工具仅在本机 `127.0.0.1:18389` 提供 WebDAV 适配；不会转发任意主机网络地址。只读限制在宿主端执行，可写目录的操作会直接修改主机文件。
+
+Wayland 控制台通过临时的宿主 `127.0.0.1` 端口，将带 TLS/NLA 认证的 RDP 流量送入该 VM 的 `vsock:3390`，再由工具连接客户机本机 GNOME 远程桌面端口；与文件夹映射共用一套工具。关闭控制台即关闭宿主转发器。GNOME 自身的 RDP 监听和防火墙策略由客户机管理。
 
 ## 内存、GPU 与快照的边界
 

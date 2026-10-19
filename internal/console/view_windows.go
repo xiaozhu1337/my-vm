@@ -22,16 +22,17 @@ var user32 = windows.NewLazySystemDLL("user32.dll")
 var atl = windows.NewLazySystemDLL("atl.dll")
 
 type viewer struct {
-	hwnd, header, child                uintptr
-	client, advanced                   *ole.IDispatch
-	context, connector, nonScriptable  *ole.IUnknown
-	callback                           *connectorCallback
-	enhanced, clipboard, linux, closed bool
-	pipe, vmid, title, status          string
-	log                                io.Writer
-	layout                             displaySettings
-	display                            displayUpdate
-	displayError                       string
+	hwnd, header, child                         uintptr
+	client, advanced                            *ole.IDispatch
+	context, connector, nonScriptable           *ole.IUnknown
+	callback                                    *connectorCallback
+	enhanced, clipboard, linux, wayland, closed bool
+	rdpPort                                     int
+	pipe, vmid, title, status                   string
+	log                                         io.Writer
+	layout                                      displaySettings
+	display                                     displayUpdate
+	displayError                                string
 }
 
 var current *viewer
@@ -119,13 +120,24 @@ func Run(args []string, log io.Writer) error {
 	flags.BoolVar(&v.enhanced, "enhanced", false, "")
 	flags.BoolVar(&v.clipboard, "clipboard", false, "")
 	flags.BoolVar(&v.linux, "linux", false, "")
+	flags.BoolVar(&v.wayland, "wayland", false, "")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if flags.NArg() != 0 || v.wayland && (!v.enhanced || !v.linux) {
+		return fmt.Errorf("控制台会话参数无效")
 	}
 	if !strings.HasPrefix(v.pipe, `\\.\pipe\my-vm-`) {
 		return fmt.Errorf("控制台仅接受 My VM 本地管道")
 	}
-	if v.enhanced && v.linux {
+	if v.wayland {
+		port, stop, err := linuxWaylandBridge(v.vmid, log)
+		if err != nil {
+			return err
+		}
+		v.rdpPort = port
+		defer stop()
+	} else if v.enhanced && v.linux {
 		v.pipe += fmt.Sprintf(".linux-%d", os.Getpid())
 		stop, err := linuxBridge(v.pipe, v.vmid, log)
 		if err != nil {
@@ -141,6 +153,9 @@ func Run(args []string, log io.Writer) error {
 	defer ole32.NewProc("OleUninitialize").Call()
 	user32.NewProc("SetProcessDpiAwarenessContext").Call(^uintptr(3))
 	class := windowClass{Size: uint32(unsafe.Sizeof(windowClass{})), Procedure: procedure, Background: 6, Name: windows.StringToUTF16Ptr("MyVM.HCS.Console")}
+	class.Instance, _, _ = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetModuleHandleW").Call(0)
+	class.Icon, _, _ = user32.NewProc("LoadIconW").Call(class.Instance, 1)
+	class.SmallIcon = class.Icon
 	class.Cursor, _, _ = user32.NewProc("LoadCursorW").Call(0, 32512)
 	atom, _, _ := user32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&class)))
 	if atom == 0 {
@@ -161,7 +176,7 @@ func Run(args []string, log io.Writer) error {
 	if err := v.initialize(); err != nil {
 		v.fail(err)
 	} else {
-		v.setStatus(mode + " · 正在连接本地管道…")
+		v.setStatus(mode + " · 正在连接客户机…")
 	}
 	user32.NewProc("ShowWindow").Call(v.hwnd, 5)
 	user32.NewProc("SetTimer").Call(v.hwnd, 1, 300, 0)
@@ -209,37 +224,39 @@ func (v *viewer) initialize() error {
 	if err != nil {
 		return err
 	}
+	auth := 0
+	if v.wayland {
+		auth = 2
+	}
 	for _, setting := range []struct {
 		name  string
 		value any
-	}{{"RelativeMouseMode", true}, {"EnableAutoReconnect", false}, {"AuthenticationLevel", 0}, {"EnableCredSspSupport", false}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", true}} {
+	}{{"RelativeMouseMode", !v.wayland}, {"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", true}} {
 		if err = put(v.advanced, setting.name, setting.value); err != nil {
 			return err
 		}
 	}
-	if err = put(v.client, "Server", v.vmid); err != nil {
+	server := v.vmid
+	if v.wayland {
+		server = "127.0.0.1"
+		if err = put(v.advanced, "RDPPort", v.rdpPort); err != nil {
+			return err
+		}
+	}
+	if err = put(v.client, "Server", server); err != nil {
 		return err
 	}
 	_ = put(v.client, "DesktopWidth", 1280)
 	_ = put(v.client, "DesktopHeight", 720)
 	_ = extended(v.client, "AllowAxToContainerEvents", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
 	_ = extended(v.client, "EnableHardwareMode", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
-	_ = extended(v.client, "EnableFrameBufferRedirection", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
-	v.context, err = createRuntime(nil, "{FB332AE7-0055-4208-92B7-20410CA8382B}", "{FB332AE7-000E-4208-92B7-20410CA8382B}")
-	if err != nil {
-		return err
+	if !v.wayland {
+		_ = extended(v.client, "EnableFrameBufferRedirection", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
 	}
-	if err = call(v.context, 12); err != nil {
-		return err
-	}
-	v.connector, err = createRuntime(v.context, "{FB332AE7-0088-4208-92B7-20410CA8382B}", "{4ACF942D-EADC-45BF-8EA8-793FE3CE31E8}")
-	if err != nil {
-		return err
-	}
-	v.callback = &connectorCallback{table: &callbackTable, viewer: v}
-	v.callback.refs.Store(1)
-	if err = call(v.connector, 3, uintptr(unsafe.Pointer(v.callback))); err != nil {
-		return err
+	if !v.wayland {
+		if err = v.initializePipe(); err != nil {
+			return err
+		}
 	}
 	if err = v.client.PutQueryInterface(ole.NewGUID("{71B4A60A-FE21-46D8-A39B-8E32BA0C5ECC}"), &v.nonScriptable); err != nil {
 		return err
@@ -250,6 +267,11 @@ func (v *viewer) initialize() error {
 	if err = call(v.nonScriptable, 39, 0xffff); err != nil {
 		return err
 	}
+	if v.wayland {
+		if err = call(v.nonScriptable, 63, 0xffff); err != nil {
+			return err
+		}
+	}
 	if err = v.configureInput(); err != nil {
 		return err
 	}
@@ -258,6 +280,13 @@ func (v *viewer) initialize() error {
 	}
 	_ = extended(v.client, "AllowRelativeMouseMode", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
 	v.resize()
+	if v.wayland {
+		result, err := oleutil.CallMethod(v.client, "Connect")
+		if result != nil {
+			_ = result.Clear()
+		}
+		return err
+	}
 	return call(v.connector, 5, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(v.pipe))))
 }
 func (v *viewer) resize() {
