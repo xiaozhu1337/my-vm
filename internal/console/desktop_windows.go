@@ -45,9 +45,18 @@ func detectLinuxWayland(runtimeID string, log io.Writer) bool {
 }
 
 func queryLinuxSession(runtimeID string) (string, error) {
-	id, err := guid.FromString(runtimeID)
+	client, err := guestClient(runtimeID)
 	if err != nil {
 		return "", err
+	}
+	defer client.CloseIdleConnections()
+	return linuxSessionType(client)
+}
+
+func guestClient(runtimeID string) (*http.Client, error) {
+	id, err := guid.FromString(runtimeID)
+	if err != nil {
+		return nil, err
 	}
 	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		connection, err := winio.Dial(ctx, &winio.HvsockAddr{VMID: id, ServiceID: winio.VsockServiceID(guestops.Port)})
@@ -56,9 +65,7 @@ func queryLinuxSession(runtimeID string) (string, error) {
 		}
 		return sharing.SocketConnection(connection), nil
 	}}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
-	return linuxSessionType(client)
+	return &http.Client{Transport: transport, Timeout: 3 * time.Second}, nil
 }
 
 func linuxSessionType(client *http.Client) (string, error) {

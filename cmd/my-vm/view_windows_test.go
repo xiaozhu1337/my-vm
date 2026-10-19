@@ -126,6 +126,9 @@ func TestViewPowerStates(t *testing.T) {
 			if !tt.HasText(state.title) || !tt.HasText(state.action) {
 				t.Fatalf("wrong power controls: %q", tt.Texts())
 			}
+			if tt.HasText("增强会话") {
+				t.Fatal("separate enhanced-session action is still present")
+			}
 			if state.state == "已暂停" {
 				click(t, tt, "正常关机")
 				if a.busy {

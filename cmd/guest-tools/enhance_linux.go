@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -62,15 +64,30 @@ func installEnhancements() error {
 			return err
 		}
 	}
-	fmt.Println("设置 GNOME 远程桌面独立的登录用户名和密码（不是修改系统账户）。")
-	// With no arguments grdctl reads credentials interactively, keeping passwords out of argv/logs.
-	if err = guestCommand("grdctl", "rdp", "set-credentials"); err != nil {
+	if err = configureGNOMELogin(); err != nil {
 		return err
 	}
 	if err = guestCommand("grdctl", "rdp", "enable"); err != nil {
 		return err
 	}
 	return guestCommand("systemctl", "--user", "enable", "--now", "gnome-remote-desktop.service")
+}
+
+func configureGNOMELogin() error {
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return err
+	}
+	defer clear(secret[:])
+	password := base64.RawURLEncoding.EncodeToString(secret[:])
+	command := exec.Command("grdctl", "rdp", "set-credentials", "myvm")
+	// One password line avoids grdctl's per-prompt buffered stdin; never pass secrets in argv.
+	command.Stdin = strings.NewReader(password + "\n")
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("配置 GNOME 专用连接凭据失败，请确认当前桌面密钥环已解锁: %w", err)
+	}
+	fmt.Println("已自动配置 GNOME 专用连接凭据，无需设置或提供 Linux 系统账户密码。")
+	return nil
 }
 
 func desktopCertificate(directory string) (string, string, error) {

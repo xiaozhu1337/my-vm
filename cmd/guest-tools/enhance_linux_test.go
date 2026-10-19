@@ -6,8 +6,42 @@ import (
 	"crypto/tls"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestGNOMEManagedCredentialUsesStdin(t *testing.T) {
+	directory := t.TempDir()
+	arguments, secret := filepath.Join(directory, "args"), filepath.Join(directory, "secret")
+	fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$MY_VM_TEST_ARGS\"\ncat > \"$MY_VM_TEST_SECRET\"\n"
+	if err := os.WriteFile(filepath.Join(directory, "grdctl"), []byte(fake), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+":"+os.Getenv("PATH"))
+	t.Setenv("MY_VM_TEST_ARGS", arguments)
+	t.Setenv("MY_VM_TEST_SECRET", secret)
+	var previous string
+	for range 2 {
+		if err := configureGNOMELogin(); err != nil {
+			t.Fatal(err)
+		}
+		args, err := os.ReadFile(arguments)
+		if err != nil || string(args) != "rdp\nset-credentials\nmyvm\n" {
+			t.Fatal("password was exposed in argv", err)
+		}
+		data, err := os.ReadFile(secret)
+		if err != nil || len(data) != 44 || data[43] != '\n' || strings.TrimSpace(string(data)) == previous {
+			t.Fatal("missing or reused generated secret", err)
+		}
+		previous = strings.TrimSpace(string(data))
+	}
+	if err := os.WriteFile(filepath.Join(directory, "grdctl"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureGNOMELogin(); err == nil || strings.Contains(err.Error(), previous) {
+		t.Fatal("failed configuration was hidden or leaked the secret")
+	}
+}
 
 func TestUbuntuVersion(t *testing.T) {
 	for _, item := range []struct{ data, want string }{

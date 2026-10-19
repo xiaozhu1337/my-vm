@@ -113,6 +113,9 @@ func (a *application) details(c *ui.Context) {
 								a.run(m.ID, "强制断电「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "kill") }, nil)
 							}
 						})
+						if button(c, "基础控制台（安装与维护）", state != "已关机" && !a.diskBusy(m.ID)) {
+							a.run(m.ID, "打开基础控制台「"+m.Name+"」", func() error { return a.manager.ShowDisplayMode(m.ID, false) }, nil)
+						}
 						if button(c, "从列表移除", off) {
 							a.remove(m)
 						}
@@ -127,7 +130,7 @@ func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
 	off, paused := state == "已关机", state == "已暂停"
 	title, description := "准备就绪", "启动虚拟机后，客户机画面将在独立窗口中打开。"
 	if !off {
-		title, description = "虚拟机正在运行", "打开客户机画面，继续你的工作。"
+		title, description = "虚拟机正在运行", "打开画面时优先使用已就绪的增强桌面，否则显示基础控制台。"
 	}
 	if paused {
 		title, description = "虚拟机已暂停", "继续运行后，客户机才能响应操作与正常关机请求。"
@@ -166,9 +169,6 @@ func (a *application) powerCard(c *ui.Context, m vm.Machine, state string) {
 				}
 			}
 			if !off {
-				if button(c, "增强会话", !paused) {
-					a.run(m.ID, "打开增强会话「"+m.Name+"」", func() error { return a.manager.ShowDisplayMode(m.ID, true) }, nil)
-				}
 				if paused {
 					if button(c, "打开画面", true) {
 						a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.manager.ShowDisplay(m.ID) }, nil)

@@ -64,7 +64,7 @@ def build_disc(platform, payloads):
                  'Windows 10/11 Pro: 双击 install.exe，以当前桌面用户授权 UAC。\n'
                  '安装共享目录、远程桌面服务和登录自启动；不访问互联网仓库。\n'
                  'GPU-PV 首次准备或驱动升级请在基础控制台运行；已有驱动匹配且设备正常时可在增强会话重复安装。\n'
-                 '安装后在主机点击“增强会话”；账户需设置登录密码。\n'
+                 '安装后在主机点击“打开画面”，已就绪时自动使用增强；账户需设置登录密码。\n'
                  'GPU 设备代码正常不代表硬件图形/计算已通过，兼容性见项目验证记录。\n')
             source = DIST / 'guest-payload' / 'windows-gpu'
             payload(source, payloads['windows-gpu'], stage / 'windows-gpu')
@@ -82,11 +82,11 @@ def build_disc(platform, payloads):
                  'python3 "/media/实际光盘路径/install.py"\n'
                  '也可在文件管理器允许启动 install.desktop；若桌面阻止光盘启动器，请使用上述终端命令。\n'
                  '包含本地依赖、共享目录、远程桌面证书和服务、自启动；不访问互联网仓库。\n'
-                 'GNOME 会询问远程桌面专用凭据；KDE 使用当前系统账户密码。\n'
+                 'GNOME 自动生成远程桌面独立凭据，主机通过私有通道读取并登录；KDE 仍使用当前系统账户密码。\n'
                  'GNOME 使用新建虚拟显示器，分辨率可随增强窗口调整；原主屏应用不保证自动迁移。\n'
                  'KDE 当前版本只适配画面，不动态调整客户机分辨率。\n'
-                 '安装后在主机点击“增强会话”，确认客户机证书并登录。\n'
-                 '保留 TLS/NLA，桌面需保持已登录；剪贴板与显示调整由原生服务协商。\n'
+                 '安装后关闭安装用窗口，在主机点击“打开画面”；GNOME 无需首次手输，仍需核对未知证书。\n'
+                 '保留 TLS 与认证，桌面需保持已登录；剪贴板与显示调整由原生服务协商。\n'
                  'GPU-PV 仅在已验证的内核和宿主驱动组合下自动准备并运行 CUDA 自检。\n')
             linux = stage / 'linux'
             directory(linux)

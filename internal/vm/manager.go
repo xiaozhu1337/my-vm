@@ -15,14 +15,15 @@ import (
 )
 
 type session struct {
-	shares          *sharing.Service
-	console         *exec.Cmd
-	consoleEnhanced bool
-	system          *hcs.System
-	endpoint        *hcs.Endpoint
-	paused          bool
-	runtimeID       string
-	machine         Machine
+	shares           *sharing.Service
+	console          *exec.Cmd
+	consoleEnhanced  bool
+	consoleAutomatic bool
+	system           *hcs.System
+	endpoint         *hcs.Endpoint
+	paused           bool
+	runtimeID        string
+	machine          Machine
 }
 
 type Manager struct {

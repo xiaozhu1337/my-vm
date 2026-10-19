@@ -23,6 +23,15 @@ type desktopTransport func(*http.Request) (*http.Response, error)
 func (f desktopTransport) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
 func TestMain(m *testing.M) {
+	if len(os.Args) == 5 && os.Args[1] == "--console" && os.Args[2] == "--detect-display" {
+		if os.Args[3] == "blocked" {
+			for {
+				time.Sleep(time.Second)
+			}
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(displayCapability{Mode: os.Args[3]})
+		os.Exit(0)
+	}
 	if len(os.Args) == 4 && os.Args[1] == "--console" && os.Args[2] == "--detect-desktop" {
 		if os.Args[3] == "blocked" {
 			for {

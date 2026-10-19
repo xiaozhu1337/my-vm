@@ -44,8 +44,11 @@ func guestWindow(pid int) uintptr {
 	displayUser32.NewProc("EnumWindows").Call(displayCallback, uintptr(pid))
 	return displayFound
 }
-func (m *Manager) ShowDisplay(id string) error { return m.ShowDisplayMode(id, false) }
+func (m *Manager) ShowDisplay(id string) error { return m.showDisplay(id, false, true) }
 func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
+	return m.showDisplay(id, enhanced, false)
+}
+func (m *Manager) showDisplay(id string, enhanced, automatic bool) error {
 	lock := m.operation(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -55,7 +58,11 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 	if s == nil {
 		return errors.New("虚拟机未运行")
 	}
-	if s.console != nil && s.consoleEnhanced != enhanced {
+	modeSpecified := !automatic
+	if s.paused {
+		automatic = false
+	}
+	if modeSpecified && s.console != nil && (s.consoleAutomatic || s.consoleEnhanced != enhanced) {
 		return errors.New("请先手动关闭现有控制台窗口，再切换基础/增强模式；虚拟机将继续运行")
 	}
 	if s.console != nil {
@@ -76,10 +83,13 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 		pipe = `\\.\pipe\my-vm-` + id + ".enhanced"
 	}
 	args := []string{"--console", "--pipe", pipe, "--vmid", s.runtimeID, "--title", s.machine.Name}
+	if automatic {
+		args = append(args, "--auto")
+	}
 	if enhanced {
 		args = append(args, "--enhanced")
 	}
-	if enhanced && s.machine.IsLinux() {
+	if (enhanced || automatic) && s.machine.IsLinux() {
 		args = append(args, "--linux")
 		if s.machine.DesktopMode() == "wayland" {
 			args = append(args, "--wayland")
@@ -87,7 +97,7 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 			args = append(args, "--x11")
 		}
 	}
-	if enhanced && s.machine.Clipboard {
+	if (enhanced || automatic) && s.machine.Clipboard {
 		args = append(args, "--clipboard")
 	}
 	command := exec.Command(executable, args...)
@@ -100,6 +110,7 @@ func (m *Manager) ShowDisplayMode(id string, enhanced bool) error {
 	m.mu.Lock()
 	s.console = command
 	s.consoleEnhanced = enhanced
+	s.consoleAutomatic = automatic
 	m.mu.Unlock()
 	go func() {
 		err := command.Wait()

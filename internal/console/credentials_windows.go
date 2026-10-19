@@ -125,9 +125,17 @@ func chooseLogin(target string, read func(string) (*loginCredential, error), pro
 
 func (v *viewer) configureLogin() error {
 	v.loginTarget = loginTarget(v.pipe)
-	login, err := chooseLogin(v.loginTarget, readLogin, func() (*loginCredential, error) {
-		return promptLogin(v.hwnd, v.loginTarget, v.title)
-	})
+	login := v.automaticLogin
+	var err error
+	if login == nil && !v.automatic {
+		capability := probeDisplay(v.vmid, "wayland", v.log)
+		login = capability.login()
+	}
+	if login == nil {
+		login, err = chooseLogin(v.loginTarget, readLogin, func() (*loginCredential, error) {
+			return promptLogin(v.hwnd, v.loginTarget, v.title)
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -187,8 +195,8 @@ func (v *viewer) forgetLogin() {
 	}
 	v.pendingLogin.clear()
 	v.pendingLogin = nil
-	v.loginNotice = "登录凭据已忘记 · 下次打开增强会话时重新输入"
-	v.setStatus("已忘记 Linux 登录凭据 · 请手动关闭此窗口，再打开增强会话输入新凭据")
+	v.loginNotice = "主机保存的登录凭据已忘记"
+	v.setStatus("已忘记主机保存的凭据 · 关闭窗口后重新连接；GNOME 专用凭据请在客户机远程桌面设置中修改")
 }
 
 func (v *viewer) addLoginMenu() {

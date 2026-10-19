@@ -3,6 +3,7 @@
 package console
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -32,8 +33,10 @@ type viewer struct {
 	eventCookie                                 uint32
 	loggedIn                                    bool
 	loginTarget, loginNotice                    string
-	pendingLogin                                *loginCredential
+	pendingLogin, automaticLogin                *loginCredential
+	automatic, fallbackPending                  bool
 	enhanced, clipboard, linux, wayland, closed bool
+	stopBridge                                  func()
 	rdpPort                                     int
 	pipe, vmid, title, status                   string
 	log                                         io.Writer
@@ -78,6 +81,11 @@ type windowClass struct {
 var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	v := current
 	switch msg {
+	case 0x8002:
+		if v != nil && v.automatic && v.enhanced && !v.closed {
+			v.fallbackBasic()
+		}
+		return 0
 	case 0x8001:
 		if v != nil && v.nonScriptable != nil {
 			up := [2]int16{0, -1}
@@ -128,7 +136,7 @@ func Run(args []string, log io.Writer) error {
 	flags := flag.NewFlagSet("console", flag.ContinueOnError)
 	v := &viewer{log: log}
 	var x11 bool
-	var probe string
+	var probe, displayProbe string
 	current = v
 	defer func() { current = nil }()
 	flags.StringVar(&v.pipe, "pipe", "", "")
@@ -139,25 +147,61 @@ func Run(args []string, log io.Writer) error {
 	flags.BoolVar(&v.linux, "linux", false, "")
 	flags.BoolVar(&v.wayland, "wayland", false, "")
 	flags.BoolVar(&x11, "x11", false, "")
+	flags.StringVar(&displayProbe, "detect-display", "", "")
+	flags.BoolVar(&v.automatic, "auto", false, "")
 	flags.StringVar(&probe, "detect-desktop", "", "")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if probe != "" && flags.NArg() == 0 && v.pipe == "" && !v.enhanced && !v.linux && !v.wayland && !x11 {
+	if probe != "" && displayProbe == "" && !v.automatic && flags.NArg() == 0 && v.pipe == "" && !v.enhanced && !v.linux && !v.wayland && !x11 {
 		kind, err := queryLinuxSession(probe)
 		if err == nil {
 			fmt.Fprintln(os.Stdout, kind)
 		}
 		return err
 	}
-	if flags.NArg() != 0 || (v.wayland || x11) && (!v.enhanced || !v.linux) || v.wayland && x11 {
+	if displayProbe != "" && probe == "" && flags.NArg() == 1 && v.pipe == "" && !v.enhanced && !v.automatic && !v.linux && !v.wayland && !x11 {
+		kind := flags.Arg(0)
+		if kind != "windows" && kind != "linux" && kind != "wayland" && kind != "x11" {
+			return fmt.Errorf("控制台会话参数无效")
+		}
+		capability, err := queryDisplay(displayProbe, kind)
+		defer clear(capability.Password)
+		if err == nil {
+			err = json.NewEncoder(os.Stdout).Encode(capability)
+		}
+		return err
+	}
+	if flags.NArg() != 0 || displayProbe != "" || probe != "" || v.automatic && v.enhanced || (v.wayland || x11) && (!(v.enhanced || v.automatic) || !v.linux) || v.wayland && x11 {
 		return fmt.Errorf("控制台会话参数无效")
 	}
 	if !strings.HasPrefix(v.pipe, `\\.\pipe\my-vm-`) {
 		return fmt.Errorf("控制台仅接受 My VM 本地管道")
 	}
-	if v.enhanced && v.linux && !v.wayland && !x11 {
+	if v.automatic {
+		kind := "windows"
+		if v.linux {
+			kind = "linux"
+			if v.wayland {
+				kind = "wayland"
+			} else if x11 {
+				kind = "x11"
+			}
+		}
+		capability := probeDisplay(v.vmid, kind, log)
+		v.enhanced = capability.Mode != ""
+		v.wayland = capability.Mode == "wayland"
+		v.automaticLogin = capability.login()
+		defer v.automaticLogin.clear()
+		if v.enhanced {
+			v.pipe = strings.TrimSuffix(v.pipe, ".basic") + ".enhanced"
+		}
+	}
+	if v.enhanced && v.linux && !v.wayland && !x11 && !v.automatic {
 		v.wayland = detectLinuxWayland(v.vmid, log)
+	}
+	if !v.enhanced {
+		v.clipboard = false
 	}
 	if v.wayland {
 		port, stop, err := linuxWaylandBridge(v.vmid, log)
@@ -165,6 +209,7 @@ func Run(args []string, log io.Writer) error {
 			return err
 		}
 		v.rdpPort = port
+		v.stopBridge = stop
 		defer stop()
 	} else if v.enhanced && v.linux {
 		v.pipe += fmt.Sprintf(".linux-%d", os.Getpid())
@@ -172,6 +217,7 @@ func Run(args []string, log io.Writer) error {
 		if err != nil {
 			return err
 		}
+		v.stopBridge = stop
 		defer stop()
 	}
 	ole32 := windows.NewLazySystemDLL("ole32.dll")
@@ -212,6 +258,9 @@ func Run(args []string, log io.Writer) error {
 	}
 	if err := v.initialize(); err != nil {
 		v.fail(err)
+		if v.automatic && v.enhanced {
+			v.fallbackBasic()
+		}
 	}
 	user32.NewProc("SetTimer").Call(v.hwnd, 1, 300, 0)
 	var msg message

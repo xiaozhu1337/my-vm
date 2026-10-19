@@ -116,13 +116,13 @@ var callbackTable = [5]uintptr{
 			user32.NewProc("SetFocus").Call(v.child)
 		}
 		if err != nil {
-			v.fail(err)
+			v.connectionFailed(err)
 		}
 		return 0
 	}),
 	syscall.NewCallback(func(this *connectorCallback, hr uintptr) uintptr {
 		if !this.viewer.closed {
-			this.viewer.fail(fmt.Errorf("控制台管道连接失败: HRESULT 0x%08X", uint32(hr)))
+			this.viewer.connectionFailed(fmt.Errorf("控制台管道连接失败: HRESULT 0x%08X", uint32(hr)))
 		}
 		return 0
 	}),

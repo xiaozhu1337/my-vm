@@ -61,6 +61,9 @@ var sessionEventTable = [7]uintptr{
 			*allow = -1
 		}
 		this.viewer.sessionEvent(id)
+		if id == 4 {
+			this.viewer.requestBasic()
+		}
 		if this.viewer.wayland && !this.viewer.closed && id == 4 && args != nil && args.count == 1 && args.values != nil && args.values.VT == ole.VT_I4 {
 			this.viewer.disconnected(int32(args.values.Val))
 		}
