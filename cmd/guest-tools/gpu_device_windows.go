@@ -12,6 +12,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+var errGPURequiresBasic = errors.New("需要安装或更新 Windows GPU-PV 驱动或重载设备。请关闭增强会话窗口，在主机打开“基础控制台”，登录后重新运行光盘中的 install.exe；无需重装系统")
+
 type gpuDevice struct {
 	id, name        string
 	instance        windows.DEVINST
@@ -135,27 +137,35 @@ func prepareWindowsGPU(media string) error {
 		return nil
 	}
 	remote, _, _ := windows.NewLazySystemDLL("user32.dll").NewProc("GetSystemMetrics").Call(0x1000)
-	if remote != 0 {
-		return errors.New("Windows GPU-PV 驱动更新需在基础控制台运行；请退出增强会话后重试")
-	}
 	directory, err := windows.GetWindowsDirectory()
 	if err != nil {
 		return err
 	}
 	for _, device := range devices {
-		changed, installErr := installWindowsGPU(media, directory, device.name)
-		var cleanup *gpuCleanupError
-		if installErr != nil && !errors.As(installErr, &cleanup) {
-			return fmt.Errorf("准备 Windows GPU-PV %s: %w", device.name, installErr)
+		if err := prepareGPUDevice(media, directory, device, remote != 0); err != nil {
+			return err
 		}
-		if changed || device.status&8 == 0 || device.status&0x400 != 0 {
-			if err := restartGPU(device); err != nil {
-				return errors.Join(installErr, err)
-			}
+	}
+	return nil
+}
+
+func prepareGPUDevice(media, directory string, device gpuDevice, remote bool) error {
+	needsRestart := device.status&8 == 0 || device.status&0x400 != 0
+	if remote && needsRestart {
+		return errGPURequiresBasic
+	}
+	changed, installErr := installWindowsGPU(media, directory, device.name, !remote)
+	var cleanup *gpuCleanupError
+	if installErr != nil && !errors.As(installErr, &cleanup) {
+		return fmt.Errorf("准备 Windows GPU-PV %s: %w", device.name, installErr)
+	}
+	if changed || needsRestart {
+		if err := restartGPU(device); err != nil {
+			return errors.Join(installErr, err)
 		}
-		if installErr != nil {
-			return fmt.Errorf("GPU-PV 文件已安装并已重载，清理临时备份失败: %w", installErr)
-		}
+	}
+	if installErr != nil {
+		return fmt.Errorf("GPU-PV 文件已安装并已重载，清理临时备份失败: %w", installErr)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +38,7 @@ func gpuFixture(t *testing.T) (media, destination, manifest string) {
 
 func TestWindowsGPUInstallIntegrityAndRepeat(t *testing.T) {
 	media, destination, _ := gpuFixture(t)
-	changed, err := installWindowsGPU(media, destination, "test gpu")
+	changed, err := installWindowsGPU(media, destination, "test gpu", true)
 	if err != nil || !changed {
 		t.Fatalf("install: %v %v", changed, err)
 	}
@@ -46,14 +47,14 @@ func TestWindowsGPUInstallIntegrityAndRepeat(t *testing.T) {
 	if err != nil || string(data) != "driver" {
 		t.Fatalf("supplement: %q %v", data, err)
 	}
-	if changed, err = installWindowsGPU(media, destination, "Test GPU"); err != nil || changed {
+	if changed, err = installWindowsGPU(media, destination, "Test GPU", true); err != nil || changed {
 		t.Fatalf("repeat: %v %v", changed, err)
 	}
 	source := filepath.Join(media, "windows-gpu", "FileRepository", "nvidia.inf_amd64_test", "nvcuda.dll")
 	if err = os.WriteFile(source, []byte("tampered"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = installWindowsGPU(media, destination, "Test GPU"); err == nil {
+	if _, err = installWindowsGPU(media, destination, "Test GPU", true); err == nil {
 		t.Fatal("accepted corrupt media")
 	}
 	if data, _ = os.ReadFile(target); string(data) != "driver" {
@@ -63,7 +64,7 @@ func TestWindowsGPUInstallIntegrityAndRepeat(t *testing.T) {
 
 func TestWindowsGPURejectUnsafeAndConflictingPackages(t *testing.T) {
 	media, destination, manifest := gpuFixture(t)
-	if _, err := installWindowsGPU(media, destination, "Other GPU"); err == nil {
+	if _, err := installWindowsGPU(media, destination, "Other GPU", true); err == nil {
 		t.Fatal("accepted different adapter")
 	}
 	path := filepath.Join(media, "windows-gpu", "manifest.yaml")
@@ -84,7 +85,7 @@ func TestWindowsGPURejectUnsafeAndConflictingPackages(t *testing.T) {
 	if err := os.WriteFile(target, []byte("existing"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := installWindowsGPU(media, destination, "Test GPU"); err == nil {
+	if _, err := installWindowsGPU(media, destination, "Test GPU", true); err == nil {
 		t.Fatal("overwrote conflicting package")
 	}
 	if data, _ := os.ReadFile(target); string(data) != "existing" {
@@ -120,7 +121,7 @@ func TestWindowsGPUCopyPathsIgnoreCase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(media, "windows-gpu", "manifest.yaml"), []byte(manifest), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := installWindowsGPU(media, destination, "Test GPU"); err != nil {
+	if _, err := installWindowsGPU(media, destination, "Test GPU", true); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(destination, "System32", "nvcuda.dll"))
@@ -148,7 +149,7 @@ func TestWindowsGPULockedSupplementLeavesAllTargetsUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer windows.CloseHandle(handle)
-	if changed, err := installGPUSupplements(source, target, records, expected); err == nil || changed {
+	if changed, err := installGPUSupplements(source, target, records, expected, true); err == nil || changed {
 		t.Fatalf("locked target accepted: %v %v", changed, err)
 	}
 	for _, record := range records {
@@ -160,6 +161,66 @@ func TestWindowsGPULockedSupplementLeavesAllTargetsUnchanged(t *testing.T) {
 	entries, err := os.ReadDir(target)
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("pending files leaked: %v %v", entries, err)
+	}
+}
+
+func TestWindowsGPURemoteInstallChecksWithoutChanges(t *testing.T) {
+	media, destination, _ := gpuFixture(t)
+	device := gpuDevice{name: "Test GPU", status: 8}
+	if err := prepareGPUDevice(media, destination, device, true); !errors.Is(err, errGPURequiresBasic) {
+		t.Fatalf("missing package: %v", err)
+	}
+	if entries, err := os.ReadDir(destination); err != nil || len(entries) != 0 {
+		t.Fatalf("remote check created files: %v %v", entries, err)
+	}
+	if _, err := installWindowsGPU(media, destination, device.name, true); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(destination, "System32", "nvcuda.dll")
+	before, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareGPUDevice(media, destination, device, true); err != nil {
+		t.Fatalf("matched remote install: %v", err)
+	}
+	after, err := os.Stat(target)
+	if err != nil || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("matched target was replaced: %v", err)
+	}
+	for _, status := range []uint32{0, 8 | 0x400} {
+		device.status = status
+		if err := prepareGPUDevice(media, destination, device, true); !errors.Is(err, errGPURequiresBasic) {
+			t.Fatalf("device requiring reload accepted: %x %v", status, err)
+		}
+	}
+	device.status = 8
+	if err := os.WriteFile(target, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareGPUDevice(media, destination, device, true); !errors.Is(err, errGPURequiresBasic) {
+		t.Fatalf("outdated supplement: %v", err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "old" {
+		t.Fatal("remote check updated supplement")
+	}
+	entries, err := os.ReadDir(filepath.Dir(target))
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("remote check left staging files: %v %v", entries, err)
+	}
+}
+
+func TestPreparationExitReportsDetailedFailureOnce(t *testing.T) {
+	if preparationExitError(0) != nil {
+		t.Fatal("successful preparation failed")
+	}
+	if !errors.Is(preparationExitError(preparationReportedExit), errPreparationReported) {
+		t.Fatal("reported error lost")
+	}
+	for _, code := range []uint32{1, 2, 0xC0000005} {
+		if err := preparationExitError(code); err == nil || errors.Is(err, errPreparationReported) {
+			t.Fatalf("unexpected child failure has no fallback: %d %v", code, err)
+		}
 	}
 }
 
@@ -186,7 +247,7 @@ func TestInstalledWindowsGPUPayload(t *testing.T) {
 			continue
 		}
 		matched = true
-		changed, err := installWindowsGPU(media, directory, adapter.Name)
+		changed, err := installWindowsGPU(media, directory, adapter.Name, true)
 		if err != nil {
 			t.Fatal(err)
 		}

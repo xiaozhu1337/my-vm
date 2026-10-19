@@ -137,7 +137,7 @@ func readWindowsGPU(media string) (windowsGPUManifest, string, error) {
 	return manifest, root, nil
 }
 
-func installWindowsGPU(media, directory, name string) (bool, error) {
+func installWindowsGPU(media, directory, name string, allowChanges bool) (bool, error) {
 	manifest, root, err := readWindowsGPU(media)
 	if err != nil {
 		return false, err
@@ -176,9 +176,6 @@ func installWindowsGPU(media, directory, name string) (bool, error) {
 		return false, errors.New("匹配的 GPU 驱动包为空")
 	}
 	parent := filepath.Join(directory, "System32", "HostDriverStore", "FileRepository")
-	if err := os.MkdirAll(parent, 0755); err != nil {
-		return false, err
-	}
 	destination := filepath.Join(parent, selected.Driver)
 	changed := false
 	if _, err := os.Lstat(destination); err == nil {
@@ -199,12 +196,18 @@ func installWindowsGPU(media, directory, name string) (bool, error) {
 	} else if !os.IsNotExist(err) {
 		return false, err
 	} else {
+		if !allowChanges {
+			return false, errGPURequiresBasic
+		}
+		if err := os.MkdirAll(parent, 0755); err != nil {
+			return false, err
+		}
 		if err := stageGPUDriver(root, parent, destination, records); err != nil {
 			return false, err
 		}
 		changed = true
 	}
-	updated, err := installGPUSupplements(root, directory, selected.Copies, expected)
+	updated, err := installGPUSupplements(root, directory, selected.Copies, expected, allowChanges)
 	return changed || updated, err
 }
 
@@ -333,7 +336,7 @@ type gpuSupplement struct {
 	installed               bool
 }
 
-func installGPUSupplements(root, directory string, records []windowsGPUCopy, expected map[string]string) (changed bool, err error) {
+func installGPUSupplements(root, directory string, records []windowsGPUCopy, expected map[string]string, allowChanges bool) (changed bool, err error) {
 	var plans []*gpuSupplement
 	remove := func(path string) error {
 		if path == "" {
@@ -377,6 +380,9 @@ func installGPUSupplements(root, directory string, records []windowsGPUCopy, exp
 		}
 		if !needed {
 			continue
+		}
+		if !allowChanges {
+			return false, errGPURequiresBasic
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return false, err
@@ -457,5 +463,5 @@ func installGPUSupplements(root, directory string, records []windowsGPUCopy, exp
 func copyGPUSupplement(source, target, digest string, overwrite bool) (bool, error) {
 	return installGPUSupplements(filepath.Dir(source), filepath.Dir(target),
 		[]windowsGPUCopy{{Source: filepath.Base(source), Destination: filepath.Base(target), Overwrite: overwrite}},
-		map[string]string{strings.ToLower(filepath.Base(source)): digest})
+		map[string]string{strings.ToLower(filepath.Base(source)): digest}, true)
 }

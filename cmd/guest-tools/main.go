@@ -29,11 +29,23 @@ func main() {
 	root, err := os.UserConfigDir()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if *install || (*prepare && preparationReportedExit != 1) {
+			installationResult(err)
+		}
+		if *prepare {
+			os.Exit(preparationReportedExit)
+		}
 		os.Exit(1)
 	}
 	logger, err := logging.Open(filepath.Join(root, "MyVMGuestTools", "logs"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if *install || (*prepare && preparationReportedExit != 1) {
+			installationResult(err)
+		}
+		if *prepare {
+			os.Exit(preparationReportedExit)
+		}
 		os.Exit(1)
 	}
 	defer logger.Close()
@@ -48,13 +60,20 @@ func main() {
 		go guestops.Run(ctx, logger)
 		err = sharing.RunProxy(ctx, logger, mapShares)
 	}
-	if *install {
-		installationResult(err)
-	}
 	if err != nil {
 		fmt.Fprintln(logger, err)
 		fmt.Fprintln(os.Stderr, err)
 		logger.Close()
+		if *install || (*prepare && preparationReportedExit != 1) {
+			installationResult(err)
+		}
+		if *prepare {
+			// Windows uses a dedicated code after showing the detailed preparation error.
+			os.Exit(preparationReportedExit)
+		}
 		os.Exit(1)
+	}
+	if *install {
+		installationResult(nil)
 	}
 }

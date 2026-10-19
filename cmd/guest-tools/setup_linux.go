@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const preparationReportedExit = 1
+
 func prepareSystem() error { return prepareLinux(mediaRoot) }
 
 func installationResult(err error) {

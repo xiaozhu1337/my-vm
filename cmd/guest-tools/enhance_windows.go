@@ -5,6 +5,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"syscall"
 	"unsafe"
 
@@ -13,11 +15,22 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
+const preparationReportedExit = 20
+
+var errPreparationReported = errors.New("系统组件准备失败，具体错误已在管理员安装窗口显示")
+
 func installationResult(err error) {
+	if errors.Is(err, errPreparationReported) {
+		return
+	}
 	text := "增强安装完成。已启用共享目录、远程桌面和登录自启动。\n请确认此账户设置了登录密码，然后在主机点击“增强桌面”。"
 	flags := uintptr(0x40)
 	if err != nil {
-		text = "增强安装失败：" + err.Error() + "\n详细记录位于当前用户配置目录的 MyVMGuestTools\\logs。"
+		logDirectory := `MyVMGuestTools\logs`
+		if root, e := os.UserConfigDir(); e == nil {
+			logDirectory = filepath.Join(root, "MyVMGuestTools", "logs")
+		}
+		text = "增强安装失败：" + err.Error() + "\n详细记录位于：" + logDirectory
 		flags = 0x10
 	}
 	windows.NewLazySystemDLL("user32.dll").NewProc("MessageBoxW").Call(0,
@@ -58,6 +71,13 @@ func elevatePrepare(exe string) error {
 	var code uint32
 	if err = windows.GetExitCodeProcess(info.Process, &code); err != nil {
 		return err
+	}
+	return preparationExitError(code)
+}
+
+func preparationExitError(code uint32) error {
+	if code == preparationReportedExit {
+		return errPreparationReported
 	}
 	if code != 0 {
 		return fmt.Errorf("系统组件准备失败（退出码 %d），请查看 MyVMGuestTools\\logs", code)
