@@ -22,8 +22,11 @@ import (
 var user32 = windows.NewLazySystemDLL("user32.dll")
 var atl = windows.NewLazySystemDLL("atl.dll")
 
+const dismissHeaderCommand = 100
+
 type viewer struct {
-	hwnd, header, child                         uintptr
+	hwnd, header, headerClose, child            uintptr
+	headerHidden                                bool
 	client, advanced                            *ole.IDispatch
 	context, connector, nonScriptable           *ole.IUnknown
 	displayClient                               *ole.IUnknown
@@ -111,6 +114,11 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			user32.NewProc("SetWindowPos").Call(hwnd, 0, uintptr(rect[0]), uintptr(rect[1]), uintptr(rect[2]-rect[0]), uintptr(rect[3]-rect[1]), 0x14)
 		}
 		return 0
+	case 0x111:
+		if v != nil && v.headerClose != 0 && lparam == v.headerClose && wparam == dismissHeaderCommand {
+			v.dismissHeader()
+			return 0
+		}
 	case 0x112:
 		if v != nil && v.wayland && wparam&0xfff0 == forgetLoginCommand {
 			v.forgetLogin()
@@ -245,8 +253,13 @@ func Run(args []string, log io.Writer) error {
 		return fmt.Errorf("创建控制台窗口失败")
 	}
 	v.header, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("STATIC"))), 0, 0x50000000, 12, 10, 1300, 32, v.hwnd, 0, 0, 0)
+	v.headerClose, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("X"))), 0x50010000, 0, 0, 24, 24, v.hwnd, dismissHeaderCommand, 0, 0)
+	if v.header == 0 || v.headerClose == 0 {
+		return fmt.Errorf("创建控制台提示栏失败")
+	}
 	font, _, _ := windows.NewLazySystemDLL("gdi32.dll").NewProc("GetStockObject").Call(17)
 	user32.NewProc("SendMessageW").Call(v.header, 0x30, font, 1)
+	user32.NewProc("SendMessageW").Call(v.headerClose, 0x30, font, 1)
 	defer v.close()
 	v.setStatus(mode + " · 正在连接客户机…")
 	if v.wayland {
@@ -272,7 +285,7 @@ func Run(args []string, log io.Writer) error {
 		if ok == 0 {
 			break
 		}
-		if (msg.Message >= 0x100 && msg.Message <= 0x109) || (msg.Message >= 0x200 && msg.Message <= 0x20e) {
+		if msg.Window != v.headerClose && ((msg.Message >= 0x100 && msg.Message <= 0x109) || (msg.Message >= 0x200 && msg.Message <= 0x20e)) {
 			handled, _, _ := user32.NewProc("SendMessageW").Call(v.child, 0x37f, 0, uintptr(unsafe.Pointer(&msg)))
 			if handled != 0 {
 				continue
@@ -400,14 +413,18 @@ func (v *viewer) resize() {
 	if dpi == 0 {
 		dpi = 96
 	}
-	top := int32(32 * dpi / 96)
-	width, height := rect.Right, rect.Bottom-top
+	top, settings := v.contentLayout(rect.Right, rect.Bottom, dpi)
+	width, height := settings.width, settings.height
 	if width < 200 || height < 200 {
 		return
 	}
-	settings := displaySettings{width: width, height: height, dpi: dpi}
 	if v.layout != settings {
-		user32.NewProc("MoveWindow").Call(v.header, 12, 12, uintptr(width-24), uintptr(top-12), 1)
+		if !v.headerHidden {
+			button := int32(24 * dpi / 96)
+			margin := int32(8 * dpi / 96)
+			user32.NewProc("MoveWindow").Call(v.header, 12, 12, uintptr(width-button-margin-24), uintptr(top-12), 1)
+			user32.NewProc("MoveWindow").Call(v.headerClose, uintptr(width-button-margin), uintptr((top-button)/2), uintptr(button), uintptr(button), 1)
+		}
 		user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
 		v.layout = settings
 	}

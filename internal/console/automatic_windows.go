@@ -199,7 +199,8 @@ func (v *viewer) fallbackBasic() {
 	if !v.automatic || !v.enhanced || v.closed {
 		return
 	}
-	hwnd, header, child := v.hwnd, v.header, v.child
+	hwnd, header, headerClose, child := v.hwnd, v.header, v.headerClose, v.child
+	headerHidden := v.headerHidden
 	pipe, runtimeID, title, log := basicDisplayPipe(v.pipe), v.vmid, v.title, v.log
 	v.close()
 	if v.stopBridge != nil {
@@ -208,7 +209,7 @@ func (v *viewer) fallbackBasic() {
 	if child != 0 {
 		user32.NewProc("DestroyWindow").Call(child)
 	}
-	*v = viewer{hwnd: hwnd, header: header, pipe: pipe, vmid: runtimeID, title: title, log: log, automatic: true}
+	*v = viewer{hwnd: hwnd, header: header, headerClose: headerClose, headerHidden: headerHidden, pipe: pipe, vmid: runtimeID, title: title, log: log, automatic: true}
 	menu, _, _ := user32.NewProc("GetSystemMenu").Call(hwnd, 0)
 	user32.NewProc("DeleteMenu").Call(menu, forgetLoginCommand, 0)
 	caption := windows.StringToUTF16Ptr("VM · " + title + " · 基础控制台")

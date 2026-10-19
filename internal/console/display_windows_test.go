@@ -14,6 +14,35 @@ import (
 	ole "github.com/go-ole/go-ole"
 )
 
+func TestDismissHeaderReclaimsSpaceAndStaysHidden(t *testing.T) {
+	for _, dpi := range []uintptr{96, 144, 192} {
+		t.Run(fmt.Sprint(dpi), func(t *testing.T) {
+			v := &viewer{enhanced: true, loggedIn: true}
+			top, before := v.contentLayout(1280, 900, dpi)
+			if top != int32(32*dpi/96) || before.height != 900-top {
+				t.Fatal("visible header has the wrong height", top, before)
+			}
+			v.layout = before
+			v.dismissHeader()
+			if !v.headerHidden || v.closed || !v.enhanced || !v.loggedIn || v.layout != (displaySettings{}) {
+				t.Fatal("dismissal closed the session or retained its old layout")
+			}
+			for _, status := range []string{"已连接", "连接已断开", "已连接 · 客户机显示尚未就绪"} {
+				v.setStatus(status)
+				top, after := v.contentLayout(1280, 900, dpi)
+				if !v.headerHidden || top != 0 || after != (displaySettings{1280, 900, dpi}) {
+					t.Fatal("status refresh restored the dismissed header", status, top, after)
+				}
+			}
+			v.layout = before
+			v.dismissHeader()
+			if v.layout != before {
+				t.Fatal("repeated dismissal invalidated the layout again")
+			}
+		})
+	}
+}
+
 func TestDisplayUpdatesOnlyAfterStableSizeAndConnection(t *testing.T) {
 	var state displayUpdate
 	now := time.Now()

@@ -14,6 +14,31 @@ type displaySettings struct {
 	dpi           uintptr
 }
 
+func (v *viewer) contentLayout(width, height int32, dpi uintptr) (int32, displaySettings) {
+	top := int32(32 * dpi / 96)
+	if v.headerHidden {
+		top = 0
+	}
+	return top, displaySettings{width: width, height: height - top, dpi: dpi}
+}
+
+func (v *viewer) dismissHeader() {
+	if v.closed || v.headerHidden {
+		return
+	}
+	v.headerHidden = true
+	for _, handle := range []uintptr{v.header, v.headerClose} {
+		if handle != 0 {
+			user32.NewProc("ShowWindow").Call(handle, 0)
+		}
+	}
+	v.layout = displaySettings{}
+	v.resize()
+	if v.child != 0 {
+		user32.NewProc("SetFocus").Call(v.child)
+	}
+}
+
 type displayUpdate struct {
 	connected, waiting bool
 	pending, applied   displaySettings
