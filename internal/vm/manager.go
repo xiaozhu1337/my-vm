@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"my-vm/internal/hcs"
 	"my-vm/internal/rdpauth"
@@ -250,6 +252,80 @@ func (m *Manager) Control(id, command string) error {
 	m.mu.Unlock()
 	return nil
 }
+func (m *Manager) ShutdownAll(ctx context.Context) error {
+	m.mu.Lock()
+	machines := make([]Machine, 0, len(m.sessions))
+	for id, s := range m.sessions {
+		machine := s.machine
+		machine.ID = id
+		machines = append(machines, machine)
+	}
+	m.mu.Unlock()
+	if err := shutdownAll(ctx, machines, m.State, m.Control); err != nil {
+		return err
+	}
+	// watch removes sessions before cleanup; wait until its operation lock is released.
+	for _, machine := range machines {
+		lock := m.operation(machine.ID)
+		lock.Lock()
+		lock.Unlock()
+	}
+	return nil
+}
+
+func shutdownAll(ctx context.Context, machines []Machine, state func(string) string, control func(string, string) error) error {
+	results := make(chan error, len(machines))
+	for _, machine := range machines {
+		go func() {
+			err := shutdownMachine(ctx, machine.ID, state, control)
+			if err != nil {
+				err = fmt.Errorf("正常关闭「%s」: %w", machine.Name, err)
+			}
+			results <- err
+		}()
+	}
+	var failures []error
+	for range machines {
+		if err := <-results; err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func shutdownMachine(ctx context.Context, id string, state func(string) string, control func(string, string) error) error {
+	if state(id) == "已关机" {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if state(id) == "已暂停" {
+		if err := control(id, "cont"); err != nil && state(id) != "已关机" {
+			return fmt.Errorf("恢复后才能正常关机: %w", err)
+		}
+	}
+	if state(id) == "已关机" {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := control(id, "system_powerdown"); err != nil && state(id) != "已关机" {
+		return err
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for state(id) != "已关机" {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("等待关机超时或已取消，管理器保持打开: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
 func (m *Manager) CreateDisk(_ string, machine Machine) error {
 	lock := m.operation(machine.ID)
 	lock.Lock()

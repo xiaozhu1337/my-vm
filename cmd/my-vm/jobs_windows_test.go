@@ -260,3 +260,74 @@ func TestCloneOpensEditorWithIndependentDraft(t *testing.T) {
 		t.Fatal("clone mode leaked into regular editing")
 	}
 }
+
+func TestPrepareCloseCancellationAndOperationGuards(t *testing.T) {
+	cases := []struct {
+		name                             string
+		configure                        func(*application)
+		active, external, leave, confirm bool
+		wantAllow, wantShutdown          bool
+		wantLeave, wantConfirm           int
+	}{
+		{name: "idle", leave: true, wantAllow: true, wantLeave: 1},
+		{name: "unsaved changes canceled", active: true, confirm: true, wantLeave: 1},
+		{name: "shutdown canceled", active: true, leave: true, wantLeave: 1, wantConfirm: 1},
+		{name: "shutdown confirmed", active: true, leave: true, confirm: true, wantShutdown: true, wantLeave: 1, wantConfirm: 1},
+		{name: "dialog open", configure: func(a *application) { a.busy = true }},
+		{name: "VM operation", configure: func(a *application) { a.operations = map[string]string{"vm": "starting"} }},
+		{name: "disk job", configure: func(a *application) { a.diskJobs = map[string]*diskJob{"vm": {}} }},
+		{name: "external job", configure: func(a *application) { a.externalJobs = map[string]bool{"vm": true} }},
+		{name: "controller active", external: true},
+		{name: "already closing", active: true, configure: func(a *application) { a.closing, a.busy = true, true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := testApplication(t, 1)
+			if tc.configure != nil {
+				tc.configure(a)
+			}
+			leaveCalls, confirmCalls := 0, 0
+			allow, shutdown := a.prepareClose(tc.active, tc.external, func() bool { leaveCalls++; return tc.leave }, func() bool { confirmCalls++; return tc.confirm })
+			if allow != tc.wantAllow || shutdown != tc.wantShutdown || leaveCalls != tc.wantLeave || confirmCalls != tc.wantConfirm {
+				t.Fatal("unexpected close decision", allow, shutdown, leaveCalls, confirmCalls)
+			}
+			if shutdown && (!a.closing || !a.busy || a.beginOperation("vm", "new start")) {
+				t.Fatal("new operation accepted while closing")
+			}
+		})
+	}
+}
+
+func TestShutdownCompletionClosesOnlyAfterAllGuestsStop(t *testing.T) {
+	for _, outcome := range []struct {
+		name   string
+		err    error
+		active bool
+	}{
+		{"refused", errors.New("guest refused shutdown"), true},
+		{"still running", nil, true},
+		{"request error but already stopped", errors.New("request failed"), false},
+	} {
+		t.Run(outcome.name, func(t *testing.T) {
+			a := testApplication(t, 1)
+			a.closing, a.busy = true, true
+			if a.finishShutdown(outcome.err, outcome.active) || a.closeReady || a.closing || a.busy || !a.messageError {
+				t.Fatal("failed shutdown exited or prevented recovery", a.message)
+			}
+			_, retry := a.prepareClose(true, false, func() bool { return true }, func() bool { return true })
+			if !retry {
+				t.Fatal("failed shutdown could not be retried")
+			}
+		})
+	}
+	a := testApplication(t, 1)
+	a.closing, a.busy = true, true
+	if !a.finishShutdown(nil, false) || !a.closeReady || !a.busy {
+		t.Fatal("successful shutdown did not prepare final close")
+	}
+	unexpected := func() bool { t.Fatal("final close asked for confirmation a second time"); return false }
+	allow, shutdown := a.prepareClose(false, true, unexpected, unexpected)
+	if !allow || shutdown {
+		t.Fatal("final close was blocked or restarted shutdown")
+	}
+}

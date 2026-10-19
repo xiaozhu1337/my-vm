@@ -26,6 +26,7 @@ type application struct {
 	loadError                               error
 	selected, page, query, message, qemuDir string
 	busy, messageError                      bool
+	closing, closeReady                     bool
 	operations                              map[string]string
 	configurationSaves                      []configurationSave
 	diskJobs                                map[string]*diskJob

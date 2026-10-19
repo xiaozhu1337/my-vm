@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,5 +178,122 @@ func TestHCSLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(manager.Root, "machines", machine.ID, "disk.vhdx")); err != nil {
 		t.Fatal("disk lost", err)
+	}
+}
+
+func TestShutdownAllRequestsInParallelAndWaitsForEveryGuest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var mu sync.Mutex
+	states := map[string]string{"slow": "运行中", "paused": "已暂停", "off": "已关机"}
+	commands := map[string][]string{}
+	state := func(id string) string { mu.Lock(); defer mu.Unlock(); return states[id] }
+	started, release := make(chan string, 2), make(chan struct{})
+	control := func(id, command string) error {
+		mu.Lock()
+		commands[id] = append(commands[id], command)
+		if command == "cont" {
+			states[id] = "运行中"
+		}
+		mu.Unlock()
+		if command == "system_powerdown" {
+			started <- id
+			if id == "slow" {
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		}
+		return nil
+	}
+	machines := []Machine{{ID: "slow", Name: "Slow"}, {ID: "paused", Name: "Paused"}, {ID: "off", Name: "Off"}}
+	done := make(chan error, 1)
+	go func() { done <- shutdownAll(ctx, machines, state, control) }()
+	for range 2 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("one slow shutdown prevented requesting the other guest")
+		}
+	}
+	close(release)
+	mu.Lock()
+	states["paused"] = "已关机"
+	mu.Unlock()
+	select {
+	case err := <-done:
+		t.Fatal("accepted requests were mistaken for all guests stopped", err)
+	default:
+	}
+	mu.Lock()
+	states["slow"] = "已关机"
+	mu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("all stopped guests did not finish shutdown")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(commands["paused"], []string{"cont", "system_powerdown"}) || !slices.Equal(commands["slow"], []string{"system_powerdown"}) || len(commands["off"]) != 0 {
+		t.Fatal("shutdown used unexpected or forced commands", commands)
+	}
+}
+
+func TestShutdownAllRetainsErrorsAndStillShutsDownOtherGuests(t *testing.T) {
+	resumeErr, shutdownErr := errors.New("resume refused"), errors.New("shutdown refused")
+	var mu sync.Mutex
+	states := map[string]string{"paused": "已暂停", "refused": "运行中", "other": "运行中"}
+	commands := map[string][]string{}
+	state := func(id string) string { mu.Lock(); defer mu.Unlock(); return states[id] }
+	control := func(id, command string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		commands[id] = append(commands[id], command)
+		switch id {
+		case "paused":
+			return resumeErr
+		case "refused":
+			return shutdownErr
+		default:
+			states[id] = "已关机"
+			return nil
+		}
+	}
+	err := shutdownAll(context.Background(), []Machine{{ID: "paused", Name: "Paused"}, {ID: "refused", Name: "Refused"}, {ID: "other", Name: "Other"}}, state, control)
+	if !errors.Is(err, resumeErr) || !errors.Is(err, shutdownErr) || !slices.Equal(commands["paused"], []string{"cont"}) || !slices.Equal(commands["other"], []string{"system_powerdown"}) {
+		t.Fatal("shutdown lost failures or abandoned another guest", err, commands)
+	}
+}
+
+func TestShutdownCancellationDoesNotForcePowerOff(t *testing.T) {
+	for _, alreadyCanceled := range []bool{true, false} {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		if alreadyCanceled {
+			cancel()
+		}
+		commands := []string{}
+		err := shutdownMachine(ctx, "vm", func(string) string { return "运行中" }, func(_ string, command string) error { commands = append(commands, command); return nil })
+		cancel()
+		if err == nil || len(commands) > 1 || len(commands) == 1 && commands[0] != "system_powerdown" || alreadyCanceled && len(commands) != 0 {
+			t.Fatal("canceled shutdown escalated or ignored cancellation", err, commands)
+		}
+	}
+	manager := NewManager(t.TempDir(), io.Discard)
+	if err := manager.ShutdownAll(context.Background()); err != nil || manager.Active() {
+		t.Fatal("empty manager did not complete", err)
+	}
+}
+
+func TestShutdownGuestCanStopBeforeItsRequestCompletes(t *testing.T) {
+	state := "运行中"
+	err := shutdownMachine(context.Background(), "vm", func(string) string { return state }, func(string, string) error { state = "已关机"; return errors.New("already stopped") })
+	if err != nil {
+		t.Fatal("guest stopping during its request prevented exit", err)
 	}
 }

@@ -3,9 +3,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/oneo-me/onevra/source/shells/plain"
@@ -100,15 +102,15 @@ func main() {
 			a.report(err)
 		}
 		a.window.OnClose(func(e *mygo.CloseEvent) {
-			if a.busy || len(a.operations) > 0 || len(a.diskJobs) > 0 || a.manager.Active() || controller != nil && controller.Active() {
+			allow, shutdown := a.prepareClose(a.manager.Active(), controller != nil && controller.Active(), a.leavePage, func() bool {
+				return a.confirm("正常关机并退出", "仍有虚拟机在运行，是否正常关闭全部虚拟机后退出？", "暂停的虚拟机会先恢复，再正常关机。等待期间管理器保持打开，全部关机后自动退出；关机失败时不会强制断电。")
+			})
+			if !allow {
 				e.PreventDefault()
-				a.messageError = false
-				a.message = "请等待当前操作完成，并关闭所有虚拟机后再退出。"
 				a.window.Invalidate()
-				return
 			}
-			if !a.leavePage() {
-				e.PreventDefault()
+			if shutdown {
+				a.shutdownForExit()
 			}
 		})
 		a.window.OnClosed(func() { mygo.App.Quit() })
@@ -116,4 +118,58 @@ func main() {
 	if err = mygo.App.Run(); err != nil {
 		_, _ = fmt.Fprintln(logger, err)
 	}
+}
+
+func (a *application) prepareClose(active, external bool, leave, confirm func() bool) (allow, shutdown bool) {
+	if a.closeReady {
+		return true, false
+	}
+	if a.closing {
+		return false, false
+	}
+	if a.busy || len(a.operations) > 0 || len(a.diskJobs) > 0 || len(a.externalJobs) > 0 || external {
+		a.message, a.messageError = "请等待当前操作完成后再退出。", false
+		return false, false
+	}
+	if !leave() {
+		return false, false
+	}
+	if !active {
+		return true, false
+	}
+	if !confirm() {
+		return false, false
+	}
+	a.closing, a.busy = true, true
+	a.message, a.messageError = "正在正常关闭所有虚拟机，全部关机后将自动退出…", false
+	return false, true
+}
+
+func (a *application) shutdownForExit() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		err := a.manager.ShutdownAll(ctx)
+		mygo.RunOnMain(func() {
+			if a.finishShutdown(err, a.manager.Active()) {
+				a.window.Close()
+			} else {
+				a.window.Invalidate()
+			}
+		})
+	}()
+}
+
+func (a *application) finishShutdown(err error, active bool) bool {
+	if err == nil && active {
+		err = fmt.Errorf("仍有虚拟机未关闭，管理器保持打开")
+	}
+	if err != nil {
+		a.closing, a.busy = false, false
+		a.report(fmt.Errorf("关闭所有虚拟机未完成，应用未退出: %w", err))
+		return false
+	}
+	// Keep new operations blocked until the final close event has been accepted.
+	a.closeReady = true
+	return true
 }
