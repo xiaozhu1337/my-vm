@@ -357,8 +357,7 @@ func (v *viewer) resize() {
 	if connected && !v.display.connected {
 		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
 	}
-	// Wayland shares an existing desktop; let SmartSizing fit it without requesting a new resolution.
-	if !v.enhanced || v.wayland {
+	if !v.enhanced {
 		v.display.connected = connected
 		return
 	}

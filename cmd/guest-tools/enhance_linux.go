@@ -50,6 +50,11 @@ func installEnhancements() error {
 	if kind == "kde" {
 		return configureKDE(root, cert, key)
 	}
+	fmt.Println("GNOME 增强会话将新增远程虚拟显示器，分辨率随窗口调整；原主屏应用不保证自动迁移。")
+	// Display Control can resize GNOME's virtual monitor, but not a mirrored physical display.
+	if err = guestCommand("gsettings", "set", "org.gnome.desktop.remote-desktop.rdp", "screen-share-mode", "extend"); err != nil {
+		return err
+	}
 	for _, args := range [][]string{
 		{"rdp", "set-tls-cert", cert}, {"rdp", "set-tls-key", key}, {"rdp", "disable-view-only"},
 	} {
