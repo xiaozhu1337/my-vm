@@ -32,6 +32,7 @@ type viewer struct {
 	renderToken                                      string
 	renderGeneration                                 uint64
 	rendererMode, reportedConnected, reportedFailure bool
+	reportedLayout                                   bool
 	hwnd, header, headerClose, child                 uintptr
 	headerHidden, statusError                        bool
 	toolbar                                          *consoleToolbar
@@ -156,6 +157,11 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			}
 		}
 		return 0
+	case 0x47, 0x6, 0x232:
+		// DefWindowProc must still deliver WM_MOVE/WM_SIZE and activation handling.
+		if v != nil && v.host != nil {
+			v.resizeRenderer()
+		}
 	case 3, 5, 0x18, 0x113:
 		if v != nil && v.hwnd != 0 {
 			v.resize()
@@ -594,7 +600,11 @@ func (v *viewer) resize() {
 		barHeight := v.toolbarHeight(dpi)
 		v.layoutToolbar(dpi)
 		v.layoutNotice(width, top, barHeight, dpi)
-		user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
+		moved, _, moveErr := user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
+		if moved == 0 {
+			v.connectionFailed(fmt.Errorf("调整客户机画面布局失败: %w", moveErr))
+			return
+		}
 		v.layout = settings
 	}
 	if connected && !v.display.connected {

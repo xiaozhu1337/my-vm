@@ -43,6 +43,10 @@ func (s *Session) Report(kind string, window uintptr) {
 	_ = s.output.Encode(Packet{Token: s.Token, Generation: s.Generation, PID: s.PID, Window: uint64(window), Kind: kind})
 }
 
+func (s *Session) ReportLayout(window uintptr, width, height int32) {
+	_ = s.output.Encode(Packet{Token: s.Token, Generation: s.Generation, PID: s.PID, Window: uint64(window), Kind: "layout-ready", Width: width, Height: height, Visible: true})
+}
+
 func (s *Session) Listen(wake func()) {
 	go func() {
 		for s.input.Scan() {

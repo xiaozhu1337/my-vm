@@ -59,6 +59,9 @@ func pumpUntil(t *testing.T, h *Host, condition func() bool) {
 		if condition() {
 			return
 		}
+		if candidate := h.Candidate; candidate != nil && candidate.Connected {
+			h.Position(candidate.Window, 100, 160, 1280, 720, true)
+		}
 		select {
 		case <-tick.C:
 		case <-deadline.C:
@@ -265,6 +268,84 @@ func TestReplacingHungActiveTerminatesRetiredProcess(t *testing.T) {
 	}
 }
 
+func TestConnectedCandidateWaitsForVisibleLayout(t *testing.T) {
+	h := fakeHost(t, "connected")
+	h.Begin(false)
+	basic := h.Candidate
+	pumpUntil(t, h, func() bool { return h.Active == basic })
+	h.Begin(true)
+	candidate := h.Candidate
+	pumpUntil(t, h, func() bool { return candidate.Connected })
+	if h.Active != basic || candidate.LayoutReady {
+		t.Fatal("network connection replaced the previous image before layout")
+	}
+	for _, size := range []Packet{
+		{Width: 1, Height: 1, Visible: true},
+		{Width: 1280, Height: 720, Visible: false},
+	} {
+		size.Kind, size.Token, size.Generation, size.PID, size.Window = "layout-ready", candidate.Token, candidate.Generation, candidate.PID, candidate.Window
+		h.events <- event{candidate, size}
+		h.Poll(func(Packet) bool { return true })
+		if h.Active != basic || candidate.LayoutReady {
+			t.Fatal("tiny or hidden layout displaced the working image")
+		}
+	}
+	select {
+	case <-basic.Done():
+		t.Fatal("working basic renderer was retired before presentation")
+	default:
+	}
+	// Exercise the actual private pipe acknowledgement; no native window is created.
+	h.Position(candidate.Window, -1200, 180, 1280, 720, true)
+	pumpUntil(t, h, func() bool { return h.Active == candidate })
+	if !candidate.LayoutReady {
+		t.Fatal("usable layout was not acknowledged")
+	}
+}
+
+func TestLayoutAcknowledgementRequiresCurrentConnectedRenderer(t *testing.T) {
+	h := New(nil)
+	retired := false
+	basic := &Worker{Window: 10, Connected: true, cancel: func() { retired = true }}
+	candidate := &Worker{Generation: 2, Token: "candidate", PID: 20, Window: 20, Enhanced: true}
+	h.Active, h.Candidate = basic, candidate
+	h.workers[basic], h.workers[candidate] = true, true
+	p := Packet{Kind: "layout-ready", Token: candidate.Token, Generation: candidate.Generation, PID: candidate.PID, Window: candidate.Window, Width: 1280, Height: 720, Visible: true}
+	h.events <- event{candidate, p}
+	h.Poll(func(Packet) bool { return true })
+	if candidate.LayoutReady || h.Active != basic || retired {
+		t.Fatal("layout preceding connection was promoted")
+	}
+	candidate.Connected = true
+	stale := p
+	stale.Generation--
+	h.events <- event{candidate, stale}
+	wrongWindow := p
+	wrongWindow.Window++
+	h.events <- event{candidate, wrongWindow}
+	h.Poll(func(Packet) bool { return true })
+	if candidate.LayoutReady || h.Active != basic || retired {
+		t.Fatal("stale layout acknowledgement displaced current picture")
+	}
+	h.events <- event{candidate, p}
+	h.Poll(func(Packet) bool { return true })
+	if !candidate.LayoutReady || h.Active != candidate || !retired {
+		t.Fatal("current usable layout did not complete the handover")
+	}
+}
+
+func TestRendererPositionKeepsLatestMoveAndVisibility(t *testing.T) {
+	h := New(nil)
+	w := &Worker{Window: 42, layout: make(chan Packet, 1)}
+	h.workers[w] = true
+	h.Position(w.Window, 50, 60, 1280, 720, false)
+	h.Position(w.Window, -1800, 240, 1600, 900, true)
+	p := <-w.layout
+	if p.Kind != "layout" || p.X != -1800 || p.Y != 240 || p.Width != 1600 || p.Height != 900 || !p.Visible || len(w.layout) != 0 {
+		t.Fatal("move retained an obsolete hidden frame or lost screen coordinates", p)
+	}
+}
+
 func TestSessionRejectsForgedHandshake(t *testing.T) {
 	token := strings.Repeat("a", 64)
 	for _, p := range []Packet{{Kind: "start", Token: token, Generation: 1, PID: os.Getpid() + 1}, {Kind: "start", Token: strings.Repeat("b", 64), Generation: 1, PID: os.Getpid()}, {Kind: "start", Token: token, Generation: 2, PID: os.Getpid()}} {
@@ -303,6 +384,9 @@ func TestRendererProcessHelper(t *testing.T) {
 		s.Report("connected", uintptr(os.Getpid()))
 	}
 	if scenario == "connected-then-hung" || scenario == "basic-then-hung" && gen > 1 {
+		if scenario == "connected-then-hung" {
+			s.ReportLayout(uintptr(os.Getpid()), 1280, 720)
+		}
 		for {
 			time.Sleep(time.Second)
 		}
@@ -318,6 +402,9 @@ func TestRendererProcessHelper(t *testing.T) {
 		for p := s.Next(); p.Kind != ""; p = s.Next() {
 			if p.Kind == "close" {
 				os.Exit(0)
+			}
+			if p.Kind == "layout" && p.Visible && p.Width >= 200 && p.Height >= 200 {
+				s.ReportLayout(uintptr(os.Getpid()), p.Width, p.Height)
 			}
 			if p.Kind == "keys" {
 				if scenario == "fail-on-keys" {

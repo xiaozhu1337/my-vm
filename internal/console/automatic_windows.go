@@ -483,22 +483,35 @@ func (v *viewer) resizeRenderer() {
 	v.layoutNotice(settings.width, top, v.toolbarHeight(dpi), dpi)
 	shown, _, _ := user32.NewProc("IsWindowVisible").Call(v.hwnd)
 	minimized, _, _ := user32.NewProc("IsIconic").Call(v.hwnd)
-	foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
-	var pid uint32
-	user32.NewProc("GetWindowThreadProcessId").Call(foreground, uintptr(unsafe.Pointer(&pid)))
-	ours := foreground == v.hwnd
-	for _, worker := range []*renderhost.Worker{v.host.Active, v.host.Candidate} {
-		ours = ours || worker != nil && worker.PID > 0 && worker.PID == int(pid)
-	}
-	visible := shown != 0 && minimized == 0 && ours
+	// An inactive console remains visible like any other window; foreground changes are not minimize events.
+	visible := rendererVisible(shown != 0, minimized != 0)
 	if v.renderWindow != 0 {
 		v.positionRenderer(v.renderWindow, visible && settings.width > 0 && settings.height > 0, top, settings)
 	}
 	if candidate := v.host.Candidate; candidate != nil && candidate.Window != 0 {
-		point := [2]int32{settings.width / 2, top + settings.height/2}
-		user32.NewProc("ClientToScreen").Call(v.hwnd, uintptr(unsafe.Pointer(&point)))
-		v.host.Position(candidate.Window, point[0], point[1], 1, 1, visible)
+		if candidate.Connected {
+			// Keep the old renderer until the candidate acknowledges a usable, visible layout.
+			v.positionRenderer(uintptr(candidate.Window), visible && settings.width >= 200 && settings.height >= 200, top, settings)
+		} else {
+			point := [2]int32{settings.width / 2, top + settings.height/2}
+			user32.NewProc("ClientToScreen").Call(v.hwnd, uintptr(unsafe.Pointer(&point)))
+			v.host.Position(candidate.Window, point[0], point[1], 1, 1, visible)
+		}
 	}
+}
+
+func rendererVisible(shown, minimized bool) bool { return shown && !minimized }
+
+func rendererPositionFlags(visible, foregroundIsHostOrRenderer bool) uintptr {
+	flags := uintptr(0x10) // SWP_NOACTIVATE: moving the image must not steal keyboard focus.
+	if !visible {
+		return flags | 0x80 | 0x1 | 0x2 | 0x4
+	}
+	if !foregroundIsHostOrRenderer {
+		// Keep unrelated windows and renderer-owned authentication dialogs above the image.
+		flags |= 0x4
+	}
+	return flags | 0x40
 }
 
 func (v *viewer) rendererCommands() {
@@ -508,18 +521,18 @@ func (v *viewer) rendererCommands() {
 	for command := v.renderer.Next(); command.Kind != ""; command = v.renderer.Next() {
 		switch command.Kind {
 		case "layout":
-			flags := uintptr(0x10 | 0x4000)
 			foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
-			if foreground != v.parent {
-				// Preserve a renderer-owned authentication dialog above the basic view.
-				flags |= 0x4
+			flags := rendererPositionFlags(command.Visible, foreground == v.parent || foreground == v.hwnd)
+			ok, _, err := user32.NewProc("SetWindowPos").Call(v.hwnd, 0, uintptr(command.X), uintptr(command.Y), uintptr(command.Width), uintptr(command.Height), flags)
+			if ok == 0 {
+				v.connectionFailed(fmt.Errorf("同步渲染窗口位置失败: %w", err))
+				continue
 			}
-			if command.Visible {
-				flags |= 0x40
-			} else {
-				flags |= 0x80 | 0x1 | 0x2
+			v.resize()
+			if !v.reportedLayout && !v.reportedFailure && v.reportedConnected && command.Visible && command.Width >= 200 && command.Height >= 200 && v.layout.width == command.Width && v.layout.height == command.Height {
+				v.reportedLayout = true
+				v.renderer.ReportLayout(v.hwnd, v.layout.width, v.layout.height)
 			}
-			user32.NewProc("SetWindowPos").Call(v.hwnd, 0, uintptr(command.X), uintptr(command.Y), uintptr(command.Width), uintptr(command.Height), flags)
 		case "close":
 			user32.NewProc("PostMessageW").Call(v.hwnd, 0x10, 0, 0)
 		case "keys":

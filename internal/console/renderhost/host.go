@@ -22,16 +22,16 @@ type Packet struct {
 }
 
 type Worker struct {
-	Generation                  uint64
-	Token                       string
-	PID                         int
-	Window                      uint64
-	Enhanced, Connected, Failed bool
-	ctx                         context.Context
-	cancel                      context.CancelFunc
-	commands                    chan Packet
-	layout                      chan Packet
-	done                        chan struct{}
+	Generation                               uint64
+	Token                                    string
+	PID                                      int
+	Window                                   uint64
+	Enhanced, Connected, LayoutReady, Failed bool
+	ctx                                      context.Context
+	cancel                                   context.CancelFunc
+	commands                                 chan Packet
+	layout                                   chan Packet
+	done                                     chan struct{}
 }
 
 func (w *Worker) Context() context.Context { return w.ctx }
@@ -132,7 +132,7 @@ func (h *Host) Poll(validate func(Packet) bool) (changed, failed bool) {
 			}
 			if p.Kind == "failed" {
 				w.Failed = true
-				w.Connected = false
+				w.Connected, w.LayoutReady = false, false
 				if h.Candidate == w {
 					h.Candidate = nil
 					w.cancel()
@@ -149,12 +149,17 @@ func (h *Host) Poll(validate func(Packet) bool) (changed, failed bool) {
 			if p.Kind == "window" {
 				w.Window = p.Window
 			}
-			if p.Kind != "connected" || w.Window != p.Window || w.Failed {
+			if w.Window != p.Window || w.Failed {
 				continue
 			}
-			w.Connected = true
+			if p.Kind == "connected" {
+				w.Connected = true
+			}
+			if p.Kind == "layout-ready" && w.Connected && p.Visible && p.Width >= 200 && p.Height >= 200 {
+				w.LayoutReady = true
+			}
 		default:
-			if w := h.Candidate; w != nil && w.Connected && !w.Failed {
+			if w := h.Candidate; w != nil && w.Connected && w.LayoutReady && !w.Failed {
 				old := h.Active
 				h.Active, h.Candidate = w, nil
 				if old != nil {
@@ -275,7 +280,7 @@ func (h *Host) run(w *Worker) {
 	scanner.Buffer(make([]byte, 1024), 4096)
 	for scanner.Scan() {
 		var p Packet
-		if json.Unmarshal(scanner.Bytes(), &p) == nil && p.PID == cmd.Process.Pid && (p.Kind == "window" || p.Kind == "connected" || p.Kind == "failed") {
+		if json.Unmarshal(scanner.Bytes(), &p) == nil && p.PID == cmd.Process.Pid && (p.Kind == "window" || p.Kind == "connected" || p.Kind == "layout-ready" || p.Kind == "failed") {
 			emit(p)
 		}
 	}

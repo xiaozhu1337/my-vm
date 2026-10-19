@@ -27,6 +27,33 @@ func TestWindowsEnhancedDoesNotDependOnGuestAgent(t *testing.T) {
 	}
 }
 
+func TestRendererVisibilityAndZOrderDuringMove(t *testing.T) {
+	// Visible background consoles must keep their image when another application receives focus.
+	if !rendererVisible(true, false) || rendererVisible(true, true) || rendererVisible(false, false) {
+		t.Fatal("foreground changes must not be treated as minimization")
+	}
+	for _, test := range []struct {
+		name                       string
+		foregroundIsHostOrRenderer bool
+	}{
+		{"host activated or dragged", true},
+		{"renderer has focus", true},
+		{"authentication dialog", false},
+		{"unrelated application", false},
+	} {
+		flags := rendererPositionFlags(true, test.foregroundIsHostOrRenderer)
+		if flags&0x10 == 0 || flags&0x40 == 0 || flags&0x80 != 0 || flags&(0x1|0x2) != 0 {
+			t.Fatal(test.name, "move must show and reposition without stealing focus", flags)
+		}
+		if (flags&0x4 == 0) != test.foregroundIsHostOrRenderer {
+			t.Fatal(test.name, "incorrect content/authentication window stacking", flags)
+		}
+	}
+	if flags := rendererPositionFlags(false, false); flags&(0x80|0x1|0x2|0x4|0x10) != 0x97 || flags&0x40 != 0 {
+		t.Fatal("minimize must hide without moving or restacking", flags)
+	}
+}
+
 func TestConsoleToolbarUsesStableMachineID(t *testing.T) {
 	id := "f0c0edc13261438a8b7f755fe72fa4bc"
 	for _, suffix := range []string{"basic", "enhanced", "enhanced.linux-1234"} {
