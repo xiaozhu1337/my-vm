@@ -49,6 +49,10 @@ case "$XDG_SESSION_TYPE" in
 esac`
 
 func queryDisplay(runtimeID, kind string) (displayCapability, error) {
+	// Windows enhanced transport reports its own availability; vmicrdv can be trigger-started.
+	if kind == "windows" {
+		return displayCapability{Mode: "windows"}, nil
+	}
 	client, err := guestClient(runtimeID)
 	if err != nil {
 		return displayCapability{}, err
@@ -58,9 +62,11 @@ func queryDisplay(runtimeID, kind string) (displayCapability, error) {
 }
 
 func displayFromGuest(client *http.Client, kind string) (displayCapability, error) {
-	args := []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "if ((Get-Service vmicrdv).Status -eq 'Running') { 'windows' } else { exit 1 }"}
-	if kind != "windows" {
-		args = []string{"/bin/sh", "-c", linuxDisplayQuery}
+	args := []string{"/bin/sh", "-c", linuxDisplayQuery}
+	if kind == "windows-ready" {
+		// A positive agent signal supplements optional VMMS WMI; it never gates opening a window.
+		args = []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; $services=Get-Service -Name vmicrdv,TermService; if (@($services | Where-Object {$_.Status -ne 'Running'}).Count -ne 0) {exit 1}; 'windows'`}
+		kind = "windows"
 	}
 	data, err := json.Marshal(guestops.Command{Args: args, Timeout: 2})
 	if err != nil {
@@ -134,6 +140,9 @@ func parseDisplay(data []byte) (displayCapability, error) {
 }
 
 func probeDisplay(runtimeID, kind string, log io.Writer) displayCapability {
+	if kind == "windows" {
+		return displayCapability{Mode: "windows"}
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return displayCapability{}
@@ -192,34 +201,69 @@ func basicDisplayPipe(pipe string) string {
 	if index := strings.Index(pipe, ".enhanced.linux-"); index >= 0 {
 		return pipe[:index] + ".basic"
 	}
-	return strings.TrimSuffix(pipe, ".enhanced") + ".basic"
+	return strings.TrimSuffix(strings.TrimSuffix(pipe, ".enhanced"), ".basic") + ".basic"
 }
 
 func (v *viewer) fallbackBasic() {
 	if !v.automatic || !v.enhanced || v.closed {
 		return
 	}
-	hwnd, header, headerClose, child := v.hwnd, v.header, v.headerClose, v.child
-	headerHidden := v.headerHidden
+	v.switchDisplay(false, true)
+}
+
+func (v *viewer) switchDisplay(enhanced, automatic bool) {
+	if v.closed {
+		return
+	}
+	hwnd, header, headerClose := v.hwnd, v.header, v.headerClose
+	headerHidden, toolbar := v.headerHidden, v.toolbar
 	pipe, runtimeID, title, log := basicDisplayPipe(v.pipe), v.vmid, v.title, v.log
+	linux, clipboard, linuxMode, machineID := v.linux, v.clipboard, v.linuxMode, v.machineID
 	v.close()
-	if v.stopBridge != nil {
-		v.stopBridge()
+	if enhanced {
+		pipe = strings.TrimSuffix(pipe, ".basic") + ".enhanced"
 	}
-	if child != 0 {
-		user32.NewProc("DestroyWindow").Call(child)
+	*v = viewer{hwnd: hwnd, header: header, headerClose: headerClose, headerHidden: headerHidden, toolbar: toolbar,
+		pipe: pipe, vmid: runtimeID, title: title, log: log, automatic: automatic, enhanced: enhanced, linux: linux, clipboard: clipboard, linuxMode: linuxMode, machineID: machineID}
+	if enhanced && linux {
+		v.wayland = linuxMode == "wayland" || linuxMode == "" && detectLinuxWayland(runtimeID, log)
 	}
-	*v = viewer{hwnd: hwnd, header: header, headerClose: headerClose, headerHidden: headerHidden, pipe: pipe, vmid: runtimeID, title: title, log: log, automatic: true}
+	if v.wayland {
+		capability := probeDisplay(runtimeID, "wayland", log)
+		v.automaticLogin = capability.login()
+		port, stop, err := linuxWaylandBridge(runtimeID, log)
+		if err != nil {
+			v.connectionFailed(err)
+			return
+		}
+		v.stopBridge, v.rdpPort = stop, port
+	} else if enhanced && linux {
+		v.pipe += fmt.Sprintf(".linux-%d", os.Getpid())
+		stop, err := linuxBridge(v.pipe, runtimeID, log)
+		if err != nil {
+			v.connectionFailed(err)
+			return
+		}
+		v.stopBridge = stop
+	}
 	menu, _, _ := user32.NewProc("GetSystemMenu").Call(hwnd, 0)
 	user32.NewProc("DeleteMenu").Call(menu, forgetLoginCommand, 0)
-	caption := windows.StringToUTF16Ptr("VM · " + title + " · 基础控制台")
-	user32.NewProc("SetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(caption)))
-	if log != nil {
-		fmt.Fprintln(log, "增强连接未就绪，已回退基础控制台")
+	if v.wayland {
+		label := windows.StringToUTF16Ptr("忘记 Linux 登录凭据")
+		user32.NewProc("AppendMenuW").Call(menu, 0, forgetLoginCommand, uintptr(unsafe.Pointer(label)))
 	}
-	v.setStatus("增强连接未就绪 · 正在连接基础控制台")
+	mode := "基础控制台"
+	if enhanced {
+		mode = "增强会话"
+	}
+	caption := windows.StringToUTF16Ptr("VM · " + title + " · " + mode)
+	user32.NewProc("SetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(caption)))
+	v.setStatus("正在连接" + mode)
+	if log != nil {
+		fmt.Fprintln(log, "切换画面:", mode)
+	}
 	if err := v.initialize(); err != nil {
-		v.fail(err)
+		v.connectionFailed(err)
 	}
 	user32.NewProc("SetTimer").Call(hwnd, 1, 300, 0)
 }

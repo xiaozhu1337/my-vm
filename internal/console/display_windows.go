@@ -19,6 +19,7 @@ func (v *viewer) contentLayout(width, height int32, dpi uintptr) (int32, display
 	if v.headerHidden {
 		top = 0
 	}
+	top += v.toolbarHeight(dpi)
 	return top, displaySettings{width: width, height: height - top, dpi: dpi}
 }
 

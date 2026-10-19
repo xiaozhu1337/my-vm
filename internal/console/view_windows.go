@@ -27,6 +27,8 @@ const dismissHeaderCommand = 100
 type viewer struct {
 	hwnd, header, headerClose, child            uintptr
 	headerHidden                                bool
+	toolbar                                     *consoleToolbar
+	machineID, linuxMode                        string
 	client, advanced                            *ole.IDispatch
 	context, connector, nonScriptable           *ole.IUnknown
 	displayClient                               *ole.IUnknown
@@ -54,6 +56,9 @@ func (v *viewer) fail(err error) { fmt.Fprintln(v.log, err); v.setStatus(err.Err
 func (v *viewer) setStatus(status string) {
 	if v.loginNotice != "" && strings.HasPrefix(status, "已连接") {
 		status += " · " + v.loginNotice
+	}
+	if v.toolbar != nil && v.toolbar.notice != "" && strings.HasPrefix(status, "已连接") {
+		status += " · " + v.toolbar.notice
 	}
 	if status == v.status {
 		return
@@ -89,6 +94,16 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			v.fallbackBasic()
 		}
 		return 0
+	case 0x8004:
+		if v != nil {
+			v.enhancedAvailabilityResult()
+		}
+		return 0
+	case 0x8003:
+		if v != nil {
+			v.finishToolbarAction()
+		}
+		return 0
 	case 0x8001:
 		if v != nil && v.nonScriptable != nil {
 			up := [2]int16{0, -1}
@@ -101,11 +116,27 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 	case 5, 0x113:
 		if v != nil && v.hwnd != 0 {
 			v.resize()
+			if msg == 0x113 {
+				v.checkEnhancedAvailability()
+			}
 		}
 		return 0
 	case 0x7:
 		if v != nil && v.child != 0 {
 			user32.NewProc("SetFocus").Call(v.child)
+		}
+		return 0
+	case 0x24:
+		if v != nil {
+			var limits [10]int32
+			if err := windows.ReadProcessMemory(windows.CurrentProcess(), lparam, (*byte)(unsafe.Pointer(&limits)), unsafe.Sizeof(limits), nil); err == nil {
+				dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(hwnd)
+				if dpi == 0 {
+					dpi = 96
+				}
+				limits[6], limits[7] = max(limits[6], int32(660*dpi/96)), max(limits[7], int32(320*dpi/96))
+				_ = windows.WriteProcessMemory(windows.CurrentProcess(), lparam, (*byte)(unsafe.Pointer(&limits)), unsafe.Sizeof(limits), nil)
+			}
 		}
 		return 0
 	case 0x2e0:
@@ -115,6 +146,9 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 		}
 		return 0
 	case 0x111:
+		if v != nil && v.toolbarCommand(wparam&0xffff, lparam) {
+			return 0
+		}
 		if v != nil && v.headerClose != 0 && lparam == v.headerClose && wparam == dismissHeaderCommand {
 			v.dismissHeader()
 			return 0
@@ -144,11 +178,12 @@ func Run(args []string, log io.Writer) error {
 	flags := flag.NewFlagSet("console", flag.ContinueOnError)
 	v := &viewer{log: log}
 	var x11 bool
-	var probe, displayProbe string
+	var probe, displayProbe, readinessProbe string
 	current = v
 	defer func() { current = nil }()
 	flags.StringVar(&v.pipe, "pipe", "", "")
 	flags.StringVar(&v.vmid, "vmid", "", "")
+	flags.StringVar(&v.machineID, "machine-id", "", "")
 	flags.StringVar(&v.title, "title", "虚拟机", "")
 	flags.BoolVar(&v.enhanced, "enhanced", false, "")
 	flags.BoolVar(&v.clipboard, "clipboard", false, "")
@@ -156,19 +191,28 @@ func Run(args []string, log io.Writer) error {
 	flags.BoolVar(&v.wayland, "wayland", false, "")
 	flags.BoolVar(&x11, "x11", false, "")
 	flags.StringVar(&displayProbe, "detect-display", "", "")
+	flags.StringVar(&readinessProbe, "detect-ready", "", "")
 	flags.BoolVar(&v.automatic, "auto", false, "")
 	flags.StringVar(&probe, "detect-desktop", "", "")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if probe != "" && displayProbe == "" && !v.automatic && flags.NArg() == 0 && v.pipe == "" && !v.enhanced && !v.linux && !v.wayland && !x11 {
+	if readinessProbe != "" && probe == "" && displayProbe == "" && flags.NArg() == 1 && v.pipe == "" && !v.enhanced && !v.automatic && !v.linux && !v.wayland && !x11 {
+		kind := flags.Arg(0)
+		if kind != "windows" && kind != "windows-agent" && kind != "linux" && kind != "wayland" && kind != "x11" {
+			return fmt.Errorf("控制台会话参数无效")
+		}
+		fmt.Fprintln(os.Stdout, queryEnhancedAvailability(readinessProbe, kind))
+		return nil
+	}
+	if probe != "" && displayProbe == "" && readinessProbe == "" && !v.automatic && flags.NArg() == 0 && v.pipe == "" && !v.enhanced && !v.linux && !v.wayland && !x11 {
 		kind, err := queryLinuxSession(probe)
 		if err == nil {
 			fmt.Fprintln(os.Stdout, kind)
 		}
 		return err
 	}
-	if displayProbe != "" && probe == "" && flags.NArg() == 1 && v.pipe == "" && !v.enhanced && !v.automatic && !v.linux && !v.wayland && !x11 {
+	if displayProbe != "" && probe == "" && readinessProbe == "" && flags.NArg() == 1 && v.pipe == "" && !v.enhanced && !v.automatic && !v.linux && !v.wayland && !x11 {
 		kind := flags.Arg(0)
 		if kind != "windows" && kind != "linux" && kind != "wayland" && kind != "x11" {
 			return fmt.Errorf("控制台会话参数无效")
@@ -180,11 +224,19 @@ func Run(args []string, log io.Writer) error {
 		}
 		return err
 	}
-	if flags.NArg() != 0 || displayProbe != "" || probe != "" || v.automatic && v.enhanced || (v.wayland || x11) && (!(v.enhanced || v.automatic) || !v.linux) || v.wayland && x11 {
+	if flags.NArg() != 0 || readinessProbe != "" || displayProbe != "" || probe != "" || v.automatic && v.enhanced || (v.wayland || x11) && !v.linux || v.wayland && x11 {
 		return fmt.Errorf("控制台会话参数无效")
 	}
 	if !strings.HasPrefix(v.pipe, `\\.\pipe\my-vm-`) {
 		return fmt.Errorf("控制台仅接受 My VM 本地管道")
+	}
+	if v.wayland {
+		v.linuxMode = "wayland"
+	} else if x11 {
+		v.linuxMode = "x11"
+	}
+	if v.machineID == "" {
+		v.machineID = machineIDFromPipe(v.pipe)
 	}
 	if v.automatic {
 		kind := "windows"
@@ -209,7 +261,7 @@ func Run(args []string, log io.Writer) error {
 		v.wayland = detectLinuxWayland(v.vmid, log)
 	}
 	if !v.enhanced {
-		v.clipboard = false
+		v.wayland = false
 	}
 	if v.wayland {
 		port, stop, err := linuxWaylandBridge(v.vmid, log)
@@ -260,6 +312,10 @@ func Run(args []string, log io.Writer) error {
 	font, _, _ := windows.NewLazySystemDLL("gdi32.dll").NewProc("GetStockObject").Call(17)
 	user32.NewProc("SendMessageW").Call(v.header, 0x30, font, 1)
 	user32.NewProc("SendMessageW").Call(v.headerClose, 0x30, font, 1)
+	if err := v.createToolbar(); err != nil {
+		return err
+	}
+	defer v.toolbar.cancel()
 	defer v.close()
 	v.setStatus(mode + " · 正在连接客户机…")
 	if v.wayland {
@@ -285,8 +341,15 @@ func Run(args []string, log io.Writer) error {
 		if ok == 0 {
 			break
 		}
-		if msg.Window != v.headerClose && ((msg.Message >= 0x100 && msg.Message <= 0x109) || (msg.Message >= 0x200 && msg.Message <= 0x20e)) {
+		guestInput, _, _ := user32.NewProc("IsChild").Call(v.child, msg.Window)
+		if (msg.Window == v.child || guestInput != 0) && ((msg.Message >= 0x100 && msg.Message <= 0x109) || (msg.Message >= 0x200 && msg.Message <= 0x20e)) {
 			handled, _, _ := user32.NewProc("SendMessageW").Call(v.child, 0x37f, 0, uintptr(unsafe.Pointer(&msg)))
+			if handled != 0 {
+				continue
+			}
+		}
+		if guestInput == 0 && msg.Window != v.child && msg.Message >= 0x100 && msg.Message <= 0x109 {
+			handled, _, _ := user32.NewProc("IsDialogMessageW").Call(v.hwnd, uintptr(unsafe.Pointer(&msg)))
 			if handled != 0 {
 				continue
 			}
@@ -335,7 +398,7 @@ func (v *viewer) initialize() error {
 	for _, setting := range []struct {
 		name  string
 		value any
-	}{{"RelativeMouseMode", !v.wayland}, {"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", true}} {
+	}{{"RelativeMouseMode", !v.wayland}, {"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.enhanced && v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", true}} {
 		if err = put(v.advanced, setting.name, setting.value); err != nil {
 			return err
 		}
@@ -419,11 +482,13 @@ func (v *viewer) resize() {
 		return
 	}
 	if v.layout != settings {
+		barHeight := v.toolbarHeight(dpi)
+		v.layoutToolbar(dpi)
 		if !v.headerHidden {
 			button := int32(24 * dpi / 96)
 			margin := int32(8 * dpi / 96)
-			user32.NewProc("MoveWindow").Call(v.header, 12, 12, uintptr(width-button-margin-24), uintptr(top-12), 1)
-			user32.NewProc("MoveWindow").Call(v.headerClose, uintptr(width-button-margin), uintptr((top-button)/2), uintptr(button), uintptr(button), 1)
+			user32.NewProc("MoveWindow").Call(v.header, 12, uintptr(barHeight+8), uintptr(max(width-button-margin-24, 1)), uintptr(top-barHeight-8), 1)
+			user32.NewProc("MoveWindow").Call(v.headerClose, uintptr(max(width-button-margin, 0)), uintptr(barHeight+(top-barHeight-button)/2), uintptr(button), uintptr(button), 1)
 		}
 		user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
 		v.layout = settings
@@ -470,6 +535,11 @@ func (v *viewer) close() {
 		return
 	}
 	v.closed = true
+	if v.stopBridge != nil {
+		v.stopBridge()
+		v.stopBridge = nil
+	}
+	v.automaticLogin.clear()
 	v.pendingLogin.clear()
 	v.pendingLogin = nil
 	user32.NewProc("KillTimer").Call(v.hwnd, 1)

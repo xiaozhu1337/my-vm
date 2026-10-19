@@ -23,6 +23,22 @@ type desktopTransport func(*http.Request) (*http.Response, error)
 func (f desktopTransport) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
 func TestMain(m *testing.M) {
+	if len(os.Args) == 5 && os.Args[1] == "--console" && os.Args[2] == "--detect-ready" {
+		state := os.Args[3]
+		if state == "blocked" {
+			for {
+				time.Sleep(time.Second)
+			}
+		}
+		if state == "fallback" {
+			state = "unknown"
+			if os.Args[4] == "windows-agent" {
+				state = "ready"
+			}
+		}
+		fmt.Println(state)
+		os.Exit(0)
+	}
 	if len(os.Args) == 5 && os.Args[1] == "--console" && os.Args[2] == "--detect-display" {
 		if os.Args[3] == "blocked" {
 			for {

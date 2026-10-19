@@ -50,9 +50,10 @@ func TestDisplayProbeRejectsFailedAndMismatchedDesktop(t *testing.T) {
 		exit            int
 		truncated, fail bool
 	}{
-		{"windows", "windows", 0, false, false}, {"linux", "x11", 0, false, false},
+		{"linux", "x11", 0, false, false},
 		{"linux", "wayland", 0, false, false}, {"x11", "wayland", 0, false, true},
 		{"wayland", "x11", 0, false, true}, {"windows", "wayland", 0, false, true},
+		{"windows-ready", "windows", 0, false, false}, {"windows-ready", "windows", 1, false, true},
 		{"linux", "windows", 0, false, true}, {"linux", "wayland", 1, false, true},
 		{"linux", "wayland", 0, true, true},
 	} {
@@ -64,7 +65,11 @@ func TestDisplayProbeRejectsFailedAndMismatchedDesktop(t *testing.T) {
 			if r.URL.Path != "/exec" || command.Timeout != 2 {
 				t.Fatal("unbounded or unrelated query")
 			}
-			if test.kind != "windows" && (len(command.Args) != 3 || command.Args[0] != "/bin/sh" || command.Args[2] != linuxDisplayQuery) {
+			if test.kind == "windows-ready" {
+				if command.Args[0] != "powershell.exe" || !strings.Contains(command.Args[len(command.Args)-1], "vmicrdv,TermService") {
+					t.Fatal("readiness query did not check the desktop services")
+				}
+			} else if test.kind != "windows" && (len(command.Args) != 3 || command.Args[0] != "/bin/sh" || command.Args[2] != linuxDisplayQuery) {
 				t.Fatal("unexpected guest command")
 			}
 			data, _ := json.Marshal(guestops.Result{ExitCode: test.exit, Stdout: []byte(test.mode + "\n"), Truncated: test.truncated})
@@ -104,9 +109,13 @@ func TestAutomaticConnectionFailureQueuesBasicOutsideCallback(t *testing.T) {
 			}
 		}
 	}
-	for _, pipe := range []string{`\\.\pipe\my-vm-123.enhanced`, `\\.\pipe\my-vm-123.enhanced.linux-42`} {
-		if basicDisplayPipe(pipe) != `\\.\pipe\my-vm-123.basic` {
-			t.Fatal("wrong basic pipe")
+	for _, pipe := range []string{`\\.\pipe\my-vm-123.basic`, `\\.\pipe\my-vm-123.enhanced`, `\\.\pipe\my-vm-123.enhanced.linux-42`} {
+		for range 4 {
+			basic := basicDisplayPipe(pipe)
+			if basic != `\\.\pipe\my-vm-123.basic` || basicDisplayPipe(basic) != basic {
+				t.Fatal("wrong or non-idempotent basic pipe:", basic)
+			}
+			pipe = strings.TrimSuffix(basic, ".basic") + ".enhanced"
 		}
 	}
 }

@@ -74,6 +74,9 @@ func TestDisplayModeSwitchPreservesConsole(t *testing.T) {
 			if err := manager.ShowDisplayMode(machine.ID, !enhanced); err == nil || !strings.Contains(err.Error(), "手动关闭") {
 				t.Fatal("mode switch did not ask to preserve the current window:", err)
 			}
+			if err := manager.ShowDisplayMode(machine.ID, enhanced); err == nil || !strings.Contains(err.Error(), "工具栏") {
+				t.Fatal("startup mode cache was used after a possible in-window switch:", err)
+			}
 			state.consoleAutomatic = true
 			if err := manager.ShowDisplayMode(machine.ID, enhanced); err == nil || !strings.Contains(err.Error(), "手动关闭") {
 				t.Fatal("explicit maintenance mode reused an automatic window:", err)
