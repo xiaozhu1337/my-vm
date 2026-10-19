@@ -23,7 +23,7 @@ type session struct {
 	consoleEnhanced  bool
 	consoleAutomatic bool
 	system           *hcs.System
-	endpoint         *hcs.Endpoint
+	endpoints        []*hcs.Endpoint
 	paused           bool
 	runtimeID        string
 	machine          Machine
@@ -115,43 +115,44 @@ func (m *Manager) Start(_ string, machine Machine) error {
 			return err
 		}
 	}
-	var endpoint *hcs.Endpoint
-	if machine.Network != "none" {
-		networks, err := hcs.Networks()
+	var networks []hcs.Network
+	if len(machine.enabledNetworkAdapters()) > 0 {
+		var err error
+		networks, err = hcs.Networks()
 		if err != nil {
 			return err
-		}
-		selected, err := selectNetwork(networks, machine.SwitchID)
-		if err != nil {
-			return err
-		}
-		endpoint, err = hcs.CreateEndpoint(selected.ID, id)
-		if err != nil {
-			return err
-		}
-		if m.Log != nil {
-			fmt.Fprintf(m.Log, "VM %s network: %s (%s), endpoint: %s\n", machine.ID, selected.Name, selected.ID, endpoint.String())
 		}
 	}
-	endpointID := ""
-	if endpoint != nil {
-		endpointID = endpoint.String()
-	}
-	configuration, err := Configuration(m.Root, machine, endpointID)
+	endpoints, err := createNetworkEndpoints(machine, networks, id, hcs.CreateEndpoint, (*hcs.Endpoint).Close)
 	if err != nil {
-		_ = endpoint.Close()
-		return err
-	}
-	system, err := hcs.Create(id, configuration)
-	if err != nil {
-		_ = endpoint.Close()
 		return err
 	}
 	failed := true
 	defer func() {
 		if failed {
+			if cleanup := closeNetworkEndpoints(endpoints, (*hcs.Endpoint).Close); cleanup != nil && m.Log != nil {
+				fmt.Fprintln(m.Log, cleanup)
+			}
+		}
+	}()
+	endpointIDs := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		endpointIDs = append(endpointIDs, endpoint.String())
+		if m.Log != nil {
+			fmt.Fprintf(m.Log, "VM %s network endpoint: %s\n", machine.ID, endpoint.String())
+		}
+	}
+	configuration, err := ConfigurationWithEndpoints(m.Root, machine, endpointIDs)
+	if err != nil {
+		return err
+	}
+	system, err := hcs.Create(id, configuration)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if failed {
 			system.Close()
-			_ = endpoint.Close()
 		}
 	}()
 	if err = system.Action("HcsStartComputeSystem"); err != nil {
@@ -173,7 +174,7 @@ func (m *Manager) Start(_ string, machine Machine) error {
 	if m.Log != nil {
 		fmt.Fprintln(m.Log, "HCS RuntimeId:", runtimeID)
 	}
-	s := &session{system: system, endpoint: endpoint, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine}
+	s := &session{system: system, endpoints: endpoints, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine}
 	if len(machine.Shares) > 0 || machine.IsLinux() {
 		var saveLogin func(*rdpauth.Login) error
 		if machine.IsLinux() {
@@ -217,7 +218,7 @@ func (m *Manager) watch(id string, s *session) {
 		_ = s.shares.Close()
 	}
 	s.system.Close()
-	if cleanup := s.endpoint.Close(); cleanup != nil && m.Log != nil {
+	if cleanup := closeNetworkEndpoints(s.endpoints, (*hcs.Endpoint).Close); cleanup != nil && m.Log != nil {
 		fmt.Fprintln(m.Log, cleanup)
 	}
 	lock.Unlock()

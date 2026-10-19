@@ -17,18 +17,20 @@ func TestNewCloneSeparatesHostResourcesAndNames(t *testing.T) {
 	source := NewMachine()
 	source.Name = "Installed Windows"
 	source.Shares = []Share{{Name: "Work", Path: t.TempDir()}}
+	source.NetworkAdapters = []NetworkAdapter{{Network: "nat", MACAddress: "02:00:00:00:00:01"}}
+	source.COMPorts = []COMPort{{Number: 1, Pipe: `\\.\pipe\source-com1`}}
 	source.ISO, source.DriverISO, source.SwitchID = "setup.iso", "drivers.iso", "old-switch"
 	first := NewClone(source, []Machine{source})
 	second := NewClone(source, []Machine{source, first})
 	for _, clone := range []Machine{first, second} {
-		if clone.ID == source.ID || clone.Name == source.Name || clone.Network != "none" || clone.SwitchID != "" || len(clone.Shares) != 0 || clone.ISO != "" || clone.DriverISO != "" {
+		if clone.ID == source.ID || clone.Name == source.Name || clone.Network != "none" || clone.SwitchID != "" || len(clone.NetworkAdapters) != 0 || len(clone.COMPorts) != 0 || len(clone.Shares) != 0 || clone.ISO != "" || clone.DriverISO != "" {
 			t.Fatalf("clone inherited conflicting resources: %+v", clone)
 		}
 		if clone.CPUs != source.CPUs || clone.MemoryMiB != source.MemoryMiB || clone.GuestOS != source.GuestOS {
 			t.Fatal("hardware and guest configuration lost")
 		}
 	}
-	if first.Name == second.Name || first.ID == second.ID || len(source.Shares) != 1 {
+	if first.Name == second.Name || first.ID == second.ID || len(source.Shares) != 1 || len(source.NetworkAdapters) != 1 || len(source.COMPorts) != 1 {
 		t.Fatal("clone reused identity or mutated source")
 	}
 }

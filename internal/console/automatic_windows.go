@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"my-vm/internal/console/renderhost"
 	"my-vm/internal/guestops"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -203,6 +205,13 @@ func (v *viewer) acceptFallback(generation uintptr) bool {
 }
 
 func (v *viewer) requestBasic() {
+	if v.renderer != nil {
+		if !v.reportedFailure {
+			v.reportedFailure = true
+			v.renderer.Report("failed", v.hwnd)
+		}
+		return
+	}
 	if !v.automatic || !v.enhanced || v.closed || v.fallbackPending {
 		return
 	}
@@ -241,6 +250,14 @@ func (v *viewer) retainFallbackReason() {
 }
 
 func (v *viewer) switchDisplay(enhanced, automatic bool) {
+	if v.host != nil {
+		v.switchRenderer(enhanced, automatic)
+		return
+	}
+	if v.hwnd != 0 {
+		v.fail(errors.New("控制台渲染进程尚未初始化"))
+		return
+	}
 	if v.closed {
 		return
 	}
@@ -311,4 +328,202 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 		v.connectionFailed(err)
 	}
 	user32.NewProc("SetTimer").Call(hwnd, 1, 300, 0)
+}
+
+func (v *viewer) owner() uintptr { return v.hwnd }
+
+func (v *viewer) validParent() bool {
+	var pid uint32
+	user32.NewProc("GetWindowThreadProcessId").Call(v.parent, uintptr(unsafe.Pointer(&pid)))
+	return pid != 0 && uintptr(pid) == v.parentPID
+}
+
+func (v *viewer) startRenderHost() {
+	executable, err := os.Executable()
+	if err != nil {
+		v.fail(err)
+		return
+	}
+	v.host = renderhost.New(func(w *renderhost.Worker) *exec.Cmd {
+		pipe := basicDisplayPipe(v.pipe)
+		if w.Enhanced {
+			pipe = strings.TrimSuffix(pipe, ".basic") + ".enhanced"
+		}
+		args := []string{"--console", "--renderer", "--parent", strconv.FormatUint(uint64(v.hwnd), 10), "--parent-pid", strconv.Itoa(os.Getpid()), "--render-token", w.Token, "--render-generation", strconv.FormatUint(w.Generation, 10), "--pipe", pipe, "--vmid", v.vmid, "--machine-id", v.machineID, "--title", v.title}
+		if w.Enhanced {
+			args = append(args, "--enhanced")
+		}
+		if v.clipboard {
+			args = append(args, "--clipboard")
+		}
+		if v.linux {
+			args = append(args, "--linux")
+		}
+		if v.linuxMode == "wayland" {
+			args = append(args, "--wayland")
+		}
+		if v.linuxMode == "x11" {
+			args = append(args, "--x11")
+		}
+		command := exec.Command(executable, args...)
+		command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+		return command
+	})
+	v.host.Begin(v.enhanced)
+}
+
+func (v *viewer) switchRenderer(enhanced, automatic bool) {
+	if v.closed {
+		return
+	}
+	v.automatic = automatic
+	v.clearPrompt()
+	if v.toolbar != nil {
+		v.toolbar.availability.notified = true
+	}
+	if !enhanced {
+		// The user's Basic command also explicitly cancels any hung candidate.
+		v.host.Cancel()
+		if v.host.Active.BasicConnected() {
+			v.setStatus("已保留基础画面")
+			return
+		}
+	}
+	if v.host.Candidate != nil {
+		return
+	}
+	if !v.host.Begin(enhanced) {
+		v.fail(errors.New("无法启动控制台渲染进程"))
+		return
+	}
+	v.revealHeader()
+	v.setStatus("正在连接候选画面 · 当前画面保持打开；点击基础可取消增强连接")
+	v.resize()
+}
+
+func (v *viewer) pollRenderer() {
+	if v.host == nil || v.closed {
+		return
+	}
+	previous := v.host.Active
+	changed, failed := v.host.Poll(func(p renderhost.Packet) bool {
+		var pid uint32
+		user32.NewProc("GetWindowThreadProcessId").Call(uintptr(p.Window), uintptr(unsafe.Pointer(&pid)))
+		parent, _, _ := user32.NewProc("GetParent").Call(uintptr(p.Window))
+		owner, _, _ := user32.NewProc("GetWindow").Call(uintptr(p.Window), 4)
+		root, _, _ := user32.NewProc("GetAncestor").Call(uintptr(p.Window), 2)
+		return pid != 0 && int(pid) == p.PID && parent == 0 && owner == 0 && root == uintptr(p.Window)
+	})
+	if changed {
+		if v.renderWindow != 0 {
+			v.positionRenderer(v.renderWindow, false, 0, displaySettings{})
+		}
+		v.renderWindow = 0
+		v.display.connected = false
+		if active := v.host.Active; active != nil {
+			v.renderWindow, v.enhanced = uintptr(active.Window), active.Enhanced
+			v.display.connected = active.Connected
+			mode := "基础控制台"
+			if v.enhanced {
+				mode = "增强会话"
+			}
+			caption := windows.StringToUTF16Ptr("VM · " + v.title + " · " + mode)
+			user32.NewProc("SetWindowTextW").Call(v.hwnd, uintptr(unsafe.Pointer(caption)))
+			v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
+			v.focusRenderer()
+		}
+	}
+	if failed {
+		v.revealHeader()
+		v.setStatus("连接失败 · 当前画面保持打开；点击基础取消候选连接，或重试增强")
+		v.statusError = true
+		v.renderStatus()
+	}
+	if failed && renderhost.ShouldRestoreBasic(v.automatic, previous, v.host.Active) {
+		v.display.connected = false
+		v.switchRenderer(false, true)
+	}
+	if changed || failed {
+		v.resize()
+	}
+}
+
+func (v *viewer) focusRenderer() {
+	if v.host != nil && v.host.Active != nil {
+		user32.NewProc("AllowSetForegroundWindow").Call(uintptr(v.host.Active.PID))
+		v.host.Active.Send("focus")
+	}
+}
+
+func (v *viewer) positionRenderer(window uintptr, visible bool, top int32, settings displaySettings) {
+	point := [2]int32{0, top}
+	user32.NewProc("ClientToScreen").Call(v.hwnd, uintptr(unsafe.Pointer(&point)))
+	v.host.Position(uint64(window), point[0], point[1], settings.width, settings.height, visible)
+}
+
+func (v *viewer) resizeRenderer() {
+	if v.closed || v.hwnd == 0 {
+		return
+	}
+	var rect [4]int32
+	user32.NewProc("GetClientRect").Call(v.hwnd, uintptr(unsafe.Pointer(&rect)))
+	dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(v.hwnd)
+	if dpi == 0 {
+		dpi = 96
+	}
+	top, settings := v.contentLayout(rect[2], rect[3], dpi)
+	v.layoutToolbar(dpi)
+	v.layoutNotice(settings.width, top, v.toolbarHeight(dpi), dpi)
+	shown, _, _ := user32.NewProc("IsWindowVisible").Call(v.hwnd)
+	minimized, _, _ := user32.NewProc("IsIconic").Call(v.hwnd)
+	foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
+	var pid uint32
+	user32.NewProc("GetWindowThreadProcessId").Call(foreground, uintptr(unsafe.Pointer(&pid)))
+	ours := foreground == v.hwnd
+	for _, worker := range []*renderhost.Worker{v.host.Active, v.host.Candidate} {
+		ours = ours || worker != nil && worker.PID > 0 && worker.PID == int(pid)
+	}
+	visible := shown != 0 && minimized == 0 && ours
+	if v.renderWindow != 0 {
+		v.positionRenderer(v.renderWindow, visible && settings.width > 0 && settings.height > 0, top, settings)
+	}
+	if candidate := v.host.Candidate; candidate != nil && candidate.Window != 0 {
+		point := [2]int32{settings.width / 2, top + settings.height/2}
+		user32.NewProc("ClientToScreen").Call(v.hwnd, uintptr(unsafe.Pointer(&point)))
+		v.host.Position(candidate.Window, point[0], point[1], 1, 1, visible)
+	}
+}
+
+func (v *viewer) rendererCommands() {
+	if v.renderer == nil {
+		return
+	}
+	for command := v.renderer.Next(); command.Kind != ""; command = v.renderer.Next() {
+		switch command.Kind {
+		case "layout":
+			flags := uintptr(0x10 | 0x4000)
+			foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
+			if foreground != v.parent {
+				// Preserve a renderer-owned authentication dialog above the basic view.
+				flags |= 0x4
+			}
+			if command.Visible {
+				flags |= 0x40
+			} else {
+				flags |= 0x80 | 0x1 | 0x2
+			}
+			user32.NewProc("SetWindowPos").Call(v.hwnd, 0, uintptr(command.X), uintptr(command.Y), uintptr(command.Width), uintptr(command.Height), flags)
+		case "close":
+			user32.NewProc("PostMessageW").Call(v.hwnd, 0x10, 0, 0)
+		case "keys":
+			if err := v.sendControlAltDelete(); err != nil {
+				v.fail(err)
+			}
+		case "focus":
+			user32.NewProc("SetForegroundWindow").Call(v.hwnd)
+			user32.NewProc("SetFocus").Call(v.child)
+		case "forget":
+			v.forgetLogin()
+		}
+	}
 }

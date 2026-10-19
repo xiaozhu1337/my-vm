@@ -5,6 +5,7 @@ package console
 import (
 	"context"
 	"fmt"
+	"my-vm/internal/console/renderhost"
 	"my-vm/internal/guestops"
 	"os"
 	"os/exec"
@@ -125,7 +126,7 @@ func queryEnhancedAvailability(runtimeID, kind string) string {
 }
 
 func (v *viewer) checkEnhancedAvailability() {
-	if v.closed || v.enhanced || v.toolbar == nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
+	if v.closed || !v.automatic || v.enhanced || v.host == nil || v.host.Candidate != nil || v.toolbar == nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
 		return
 	}
 	bar := v.toolbar
@@ -156,7 +157,6 @@ func (v *viewer) enhancedAvailabilityResult() {
 		return
 	}
 	availability := &v.toolbar.availability
-	prompt := promptEnhanced
 	select {
 	case state := <-availability.results:
 		if state != availability.last {
@@ -165,20 +165,15 @@ func (v *viewer) enhancedAvailabilityResult() {
 				fmt.Fprintln(v.log, "增强状态:", state)
 			}
 		}
-		if v.enhanced || v.toolbar.busy || v.toolbar.prompt != promptNone {
+		if !v.automatic || v.enhanced || v.host == nil || v.host.Candidate != nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
 			availability.checking = false
 			return
 		}
-		offer := state == "ready"
-		if !v.linux && v.display.connected && (state == "unknown" || state == "available") {
-			offer = true
-			prompt = promptEnhancedTry
-		}
-		if !availability.finish(offer) {
+		if !availability.finish(renderhost.ShouldUpgrade(v.automatic, state)) {
 			return
 		}
 	default:
 		return
 	}
-	v.showPrompt(prompt)
+	v.switchRenderer(true, true)
 }

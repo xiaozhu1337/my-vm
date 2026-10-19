@@ -15,6 +15,9 @@ type displaySettings struct {
 }
 
 func (v *viewer) contentLayout(width, height int32, dpi uintptr) (int32, displaySettings) {
+	if v.rendererMode {
+		return 0, displaySettings{width: width, height: height, dpi: dpi}
+	}
 	top := int32(32 * dpi / 96)
 	if v.headerHidden {
 		top = 0

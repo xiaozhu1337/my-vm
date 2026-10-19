@@ -4,6 +4,7 @@ package vm
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -42,7 +43,7 @@ func TestHCSDefaultNAT(t *testing.T) {
 		}
 	}()
 	manager.mu.Lock()
-	endpoint := manager.sessions[machine.ID].endpoint.ID
+	endpoint := manager.sessions[machine.ID].endpoints[0].ID
 	manager.mu.Unlock()
 	native := windows.NewLazySystemDLL("computenetwork.dll")
 	free := windows.NewLazySystemDLL("ole32.dll").NewProc("CoTaskMemFree")
@@ -76,6 +77,55 @@ func TestHCSDefaultNAT(t *testing.T) {
 		t.Fatal("VM attached to wrong network", actual)
 	}
 	t.Logf("temporary VM endpoint %s, MAC %s belongs to Default Switch %s", endpoint.String(), actual.MacAddress, actual.HostComputeNetwork)
+}
+
+func TestDeviceEndpointLifecycle(t *testing.T) {
+	machine := NewMachine()
+	machine.NetworkAdapters = []NetworkAdapter{{Network: "none"}, {Network: "nat", MACAddress: "02:00:00:00:00:01"}, {Network: "bridge", SwitchID: defaultSwitchID}}
+	networks := []hcs.Network{{ID: defaultSwitchID, Type: "ICS"}}
+	failure := errors.New("create failed")
+	cleanupFailure := errors.New("cleanup failed")
+	for _, failAt := range []int{0, 1, 2, -1} {
+		created, closed := 0, 0
+		create := func(switchID, owner string, mac ...string) (*hcs.Endpoint, error) {
+			if created == failAt {
+				return nil, failure
+			}
+			if switchID != defaultSwitchID || owner != "owner" || len(mac) != 1 {
+				t.Fatal("endpoint arguments changed", switchID, owner, mac)
+			}
+			if created == 1 && mac[0] != machine.NetworkAdapters[1].MACAddress {
+				t.Fatal("additional NIC lost its MAC")
+			}
+			created++
+			return &hcs.Endpoint{}, nil
+		}
+		closeEndpoint := func(*hcs.Endpoint) error { closed++; return cleanupFailure }
+		endpoints, err := createNetworkEndpoints(machine, networks, "owner", create, closeEndpoint)
+		if failAt >= 0 {
+			if !errors.Is(err, failure) || created != closed || len(endpoints) != 0 || created > 0 && !errors.Is(err, cleanupFailure) {
+				t.Fatal("partial endpoint failure leaked resources", created, closed, endpoints, err)
+			}
+		} else {
+			if err != nil || created != 3 || closed != 0 {
+				t.Fatal("successful endpoints closed early", created, closed, err)
+			}
+			if err = closeNetworkEndpoints(endpoints, closeEndpoint); !errors.Is(err, cleanupFailure) || closed != 3 {
+				t.Fatal("cleanup did not visit every endpoint", closed, err)
+			}
+		}
+	}
+	machine.NetworkAdapters[1].SwitchID = "missing"
+	created, closed := 0, 0
+	_, err := createNetworkEndpoints(machine, networks, "owner", func(string, string, ...string) (*hcs.Endpoint, error) { created++; return &hcs.Endpoint{}, nil }, func(*hcs.Endpoint) error { closed++; return nil })
+	if err == nil || created != 1 || closed != 1 {
+		t.Fatal("network selection failure leaked primary endpoint", created, closed, err)
+	}
+	machine.Network, machine.NetworkAdapters = "none", nil
+	endpoints, err := createNetworkEndpoints(machine, nil, "owner", nil, nil)
+	if err != nil || len(endpoints) != 0 {
+		t.Fatal("offline machine created endpoints", endpoints, err)
+	}
 }
 
 func TestSelectNetworkDoesNotUseWSLForDefaultNAT(t *testing.T) {

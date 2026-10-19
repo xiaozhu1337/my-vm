@@ -3,6 +3,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
 	"my-vm/internal/vm"
@@ -28,7 +30,137 @@ func choice(c *ui.Context, label string, value *string, options []string, labels
 	})
 }
 
+func (a *application) networkEditor(c *ui.Context) {
+	card(c, "网络适配器", "默认交换机支持自动获取地址；自定义 NAT 需在客户机配置静态 IP、网关和 DNS。", func() {
+		if button(c, "刷新可用网络", !a.diskBusy("host-networks")) {
+			a.refreshHostNetworks()
+		}
+		a.adapterFields(c, "主网卡", &a.draft.Network, &a.draft.SwitchID, nil)
+		for i := range a.draft.NetworkAdapters {
+			adapter := &a.draft.NetworkAdapters[i]
+			removed := false
+			ui.Column(c).Key(fmt.Sprintf("adapter-%d", i)).FillWidth().Gap(10).Children(func() {
+				a.adapterFields(c, fmt.Sprintf("网卡 %d", i+2), &adapter.Network, &adapter.SwitchID, &adapter.MACAddress)
+				if action(c, fmt.Sprintf("移除网卡 %d", i+2), true, components.ButtonGhost) {
+					a.draft.NetworkAdapters = append(a.draft.NetworkAdapters[:i], a.draft.NetworkAdapters[i+1:]...)
+					removed = true
+				}
+			})
+			if removed {
+				break
+			}
+		}
+		if button(c, "添加网络适配器", len(a.draft.NetworkAdapters) < 7) {
+			a.draft.NetworkAdapters = append(a.draft.NetworkAdapters, vm.NetworkAdapter{Network: "nat"})
+		}
+	})
+}
+func (a *application) adapterFields(c *ui.Context, label string, network, switchID, mac *string) {
+	ui.Column(c).Key(label).FillWidth().Gap(10).Children(func() {
+		text(c, label)
+		previous := *network
+		choice(c, label+"连接方式", network, []string{"none", "nat", "bridge"}, map[string]string{"none": "不连接", "nat": "NAT / 共享网络", "bridge": "桥接 / 外部交换机"})
+		if previous != *network && *network == "none" {
+			*switchID = ""
+		}
+		if *network != "none" {
+			options, labels := []string{""}, map[string]string{"": "系统 Default Switch"}
+			for _, n := range a.networks {
+				options = append(options, n.ID)
+				labels[n.ID] = n.Name + " / " + n.Type
+			}
+			if *switchID != "" {
+				if _, ok := labels[*switchID]; !ok {
+					options = append(options, *switchID)
+					labels[*switchID] = "原有网络 / " + *switchID
+				}
+			}
+			choice(c, label+"所用网络", switchID, options, labels)
+			field(c, label+"交换机 ID", switchID)
+		}
+		if mac != nil {
+			field(c, label+" MAC 地址（留空自动分配）", mac)
+		}
+	})
+}
+func (a *application) serialEditor(c *ui.Context) {
+	card(c, "串口 COM", "串口连接本地主机命名管道；关机后可增删 COM1、COM2。", func() {
+		for i := range a.draft.COMPorts {
+			port := &a.draft.COMPorts[i]
+			removed := false
+			ui.Column(c).Key(fmt.Sprintf("com-%d", port.Number)).FillWidth().Gap(8).Children(func() {
+				text(c, fmt.Sprintf("COM%d", port.Number))
+				field(c, fmt.Sprintf("COM%d 命名管道", port.Number), &port.Pipe)
+				if action(c, fmt.Sprintf("移除 COM%d", port.Number), true, components.ButtonGhost) {
+					a.draft.COMPorts = append(a.draft.COMPorts[:i], a.draft.COMPorts[i+1:]...)
+					removed = true
+				}
+			})
+			if removed {
+				break
+			}
+		}
+		if button(c, "添加 COM 串口", len(a.draft.COMPorts) < 2) {
+			number := 1
+			for _, port := range a.draft.COMPorts {
+				if port.Number == 1 {
+					number = 2
+				}
+			}
+			a.draft.COMPorts = append(a.draft.COMPorts, vm.COMPort{Number: number, Pipe: fmt.Sprintf(`\\.\pipe\myvm-serial-%s-%d`, a.draft.ID, number)})
+		}
+	})
+}
+func (a *application) deviceManager(c *ui.Context) {
+	editable := a.manager.State(a.draft.ID) == "已关机" && !a.diskBusy(a.draft.ID) && !a.diskBusy("host-network-change")
+	pageHeading(c, "设备管理器", a.draft.Name+" · 本程序配置的虚拟硬件")
+	scrollBody(c, "devices-"+a.draft.ID, func() {
+		card(c, "硬件清单", "固定硬件由 HCS 提供；设备配置在下次启动时生效。", func() {
+			infoRow(c, "处理器", fmt.Sprintf("%d 个虚拟 CPU", a.draft.CPUs))
+			infoRow(c, "内存", fmt.Sprintf("%d MiB", a.draft.MemoryMiB))
+			infoRow(c, "固件", "UEFI / 第二代虚拟机")
+			infoRow(c, "磁盘控制器", "SCSI / 系统 VHDX 与两个 DVD 插槽")
+			infoRow(c, "系统磁盘", vm.DiskPath(a.root, a.draft))
+			infoRow(c, "显示与输入", "Hyper-V Video / VMBus 键盘与鼠标 / RDP 增强画面")
+			gpu := "未启用"
+			if a.draft.GPUShared {
+				gpu = "GPU-PV / 宿主默认显卡"
+			}
+			infoRow(c, "共享显卡", gpu)
+			infoRow(c, "客户机通道", "Hyper-V Socket / 命令、状态、共享目录及增强桌面")
+			if action(c, "编辑全部配置", editable, components.ButtonSecondary) {
+				a.deviceOnly = false
+			}
+		})
+		ui.Column(c).FillWidth().Gap(14).Disabled(!editable).Children(func() {
+			a.networkEditor(c)
+			a.serialEditor(c)
+			card(c, "光驱", "关机后修改安装光盘和增强光盘。", func() {
+				field(c, "安装光盘路径", &a.draft.ISO)
+				field(c, "增强光盘路径", &a.draft.DriverISO)
+			})
+			a.shareEditor(c)
+		})
+	})
+	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+		if !editable {
+			muted(c, "运行中只读，请先关闭虚拟机再修改设备。")
+		}
+		ui.Spacer(c)
+		if action(c, "返回", true, components.ButtonGhost) && a.leavePage() {
+			a.page = ""
+		}
+		if action(c, "保存设备", editable, components.ButtonPrimary) {
+			a.saveDraft()
+		}
+	})
+}
+
 func (a *application) editor(c *ui.Context) {
+	if a.deviceOnly {
+		a.deviceManager(c)
+		return
+	}
 	title, description, saveLabel := "编辑虚拟机", "按工作需要调整资源与设备。保存后在下次启动时生效。", "保存更改"
 	if a.creating {
 		title, description, saveLabel = "新建虚拟机", "为你的新环境设置名称、资源和安装镜像。", "创建虚拟机"
@@ -120,11 +252,8 @@ func (a *application) editor(c *ui.Context) {
 			muted(c, "副本保留客户机的账户、主机名和系统身份。首次启动建议保持断网，准备好客户机身份后再联网。")
 		}
 		a.shareEditor(c)
-		card(c, "网络连接", "NAT 使用 Hyper-V 默认交换机；桥接使用预先创建的外部交换机。", func() {
-			choice(c, "网络方式", &a.draft.Network, []string{"none", "nat", "bridge"}, map[string]string{"none": "断开网络 / 隔离副本", "nat": "NAT / Hyper-V 默认交换机", "bridge": "桥接 / Hyper-V 外部交换机"})
-			field(c, "Hyper-V 交换机 ID（NAT 可留空）", &a.draft.SwitchID)
-			muted(c, "可在左下角 Hyper-V 设置中查看交换机名称和 ID。桥接需要已连接物理网卡的外部交换机。")
-		})
+		a.networkEditor(c)
+		a.serialEditor(c)
 	})
 	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 		muted(c, "配置仅在关机时可修改")

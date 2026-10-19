@@ -64,6 +64,91 @@ func blockedMachineAction(t *testing.T, tt *ui.Tester, name, action string) {
 	tt.CloseMenu()
 }
 
+func TestDeviceManagerAndGlobalSettings(t *testing.T) {
+	a := testApplication(t, 2)
+	machine := a.config.Machines[1]
+	tt := testView(a, 1080, 720)
+	chooseMachineAction(t, tt, machine.Name, "设备管理器")
+	if !a.deviceOnly || a.draft.ID != machine.ID || !tt.HasText("设备管理器") || !tt.HasText("硬件清单") {
+		t.Fatalf("wrong device page: %+v %v", a.draft, tt.Texts())
+	}
+	click(t, tt, "返回")
+	click(t, tt, "全局设置")
+	click(t, tt, "主机网卡")
+	if a.settingsTab != 2 || !tt.HasText("主机网络适配器") {
+		t.Fatal("host adapters page missing")
+	}
+	click(t, tt, "虚拟网络")
+	if a.settingsTab != 1 || !tt.HasText("新建 NAT 网络") {
+		t.Fatal("network management page missing")
+	}
+	if err := tt.RightClick("全局设置"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("数据存储"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settingsTab != 3 {
+		t.Fatal("global settings menu did not select storage")
+	}
+}
+func TestDeviceDraftIsolationAndAddRemove(t *testing.T) {
+	a := testApplication(t, 1)
+	m := a.config.Machines[0]
+	m.NetworkAdapters = []vm.NetworkAdapter{{Network: "nat", MACAddress: "02:00:00:00:00:01"}}
+	m.COMPorts = []vm.COMPort{{Number: 1, Pipe: `\\.\pipe\myvm-fixture-com1`}}
+	a.config.Machines[0] = m
+	a.edit(m, false)
+	a.draft.NetworkAdapters[0].MACAddress = "02:00:00:00:00:02"
+	a.draft.COMPorts[0].Pipe = `\\.\pipe\myvm-fixture-other`
+	if a.savedDraft.NetworkAdapters[0].MACAddress != m.NetworkAdapters[0].MACAddress || a.savedDraft.COMPorts[0].Pipe != m.COMPorts[0].Pipe || !a.hasUnsavedChanges() {
+		t.Fatal("device draft aliases committed state")
+	}
+	tt := ui.NewTester(func(c *ui.Context) {
+		c.SetTheme(appTheme(c))
+		ui.Column(c).FillWidth().Children(func() { a.networkEditor(c); a.serialEditor(c) })
+	}, 900, 2400)
+	click(t, tt, "添加网络适配器")
+	click(t, tt, "添加 COM 串口")
+	if len(a.draft.NetworkAdapters) != 2 || len(a.draft.COMPorts) != 2 || a.draft.COMPorts[1].Number != 2 {
+		t.Fatal("device additions failed")
+	}
+	if err := a.draft.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	click(t, tt, "移除网卡 2")
+	click(t, tt, "移除 COM1")
+	if len(a.draft.NetworkAdapters) != 1 || len(a.draft.COMPorts) != 1 || a.draft.COMPorts[0].Number != 2 {
+		t.Fatal("removing first device corrupted remaining list")
+	}
+	click(t, tt, "添加 COM 串口")
+	if a.draft.COMPorts[1].Number != 1 {
+		t.Fatal("did not reuse free COM1 slot")
+	}
+	a.busy = true
+	a.finishEditing(m, a.editVersion)
+	a.draft.COMPorts[0].Pipe = `\\.\pipe\changed-after-save`
+	if a.savedDraft.COMPorts[0].Pipe != m.COMPorts[0].Pipe || a.config.Machines[0].COMPorts[0].Pipe != m.COMPorts[0].Pipe {
+		t.Fatal("modal completion aliases device state")
+	}
+}
+func TestGlobalNetworkMutationGates(t *testing.T) {
+	a := testApplication(t, 1)
+	a.config.Machines[0].NetworkAdapters = []vm.NetworkAdapter{{Network: "bridge", SwitchID: "00000000-0000-0000-0000-000000000123"}}
+	if len(a.networkReferences()) != 1 || !a.networkMutationAllowed() {
+		t.Fatal("wrong initial network state")
+	}
+	a.operations = map[string]string{"host-network-change": "create"}
+	if a.networkMutationAllowed() || a.beginOperation(a.selected, "start") {
+		t.Fatal("network mutation allowed overlapping operation")
+	}
+	a.edit(a.config.Machines[0], false)
+	a.saveDraft()
+	if !a.messageError || len(a.configurationSaves) > 0 {
+		t.Fatal("saved config during network mutation")
+	}
+}
+
 func TestViewNavigation(t *testing.T) {
 	a := testApplication(t, 1)
 	tt := testView(a, 1080, 720)
@@ -72,8 +157,8 @@ func TestViewNavigation(t *testing.T) {
 		t.Fatalf("edit navigation failed: page=%q texts=%q", a.page, tt.Texts())
 	}
 	click(t, tt, "取消")
-	click(t, tt, "Hyper-V 设置")
-	if a.page != "settings" || !tt.HasText("Hyper-V 设置") {
+	click(t, tt, "全局设置")
+	if a.page != "settings" || !tt.HasText("全局设置") {
 		t.Fatal("settings navigation failed")
 	}
 	click(t, tt, "返回")
@@ -128,7 +213,7 @@ func TestViewBusyBlocksActions(t *testing.T) {
 	a := testApplication(t, 1)
 	a.busy = true
 	tt := testView(a, 1080, 720)
-	for _, label := range []string{"新建虚拟机", "Hyper-V 设置"} {
+	for _, label := range []string{"新建虚拟机", "全局设置"} {
 		click(t, tt, label)
 	}
 	if err := tt.RightClick(a.config.Machines[0].Name); err != nil {
@@ -343,7 +428,7 @@ func TestViewMinimumSizeAndTheme(t *testing.T) {
 			a := testApplication(t, 21)
 			tt := testView(a, 1040, 660)
 			tt.SetDark(dark)
-			for _, label := range []string{"新建虚拟机", "上一页", "下一页", "Hyper-V 设置", "Workstation 01", "右键虚拟机查看操作", "Windows / HCS"} {
+			for _, label := range []string{"新建虚拟机", "上一页", "下一页", "全局设置", "Workstation 01", "右键虚拟机查看操作", "Windows / HCS"} {
 				r, ok := tt.Find(label)
 				if !ok || r.X < 0 || r.Y < 0 || r.X+r.W > 1040 || r.Y+r.H > 660 {
 					t.Fatalf("control %q outside minimum window: %v, found=%t", label, r, ok)

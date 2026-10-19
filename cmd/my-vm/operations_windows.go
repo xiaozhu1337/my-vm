@@ -18,7 +18,7 @@ type configurationSave struct {
 }
 
 func (a *application) beginOperation(id, label string) bool {
-	if a.busy || a.loadError != nil || a.diskBusy(id) {
+	if a.busy || a.loadError != nil || a.diskBusy(id) || (id != "host-network-change" && a.diskBusy("host-network-change")) {
 		return false
 	}
 	if a.operations == nil {

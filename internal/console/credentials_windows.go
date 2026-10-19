@@ -94,7 +94,7 @@ func (v *viewer) configureLogin() error {
 			if recovered := capability.login(); recovered != nil {
 				return recovered, nil
 			}
-			return promptLogin(v.hwnd, v.loginTarget, v.title)
+			return promptLogin(v.owner(), v.loginTarget, v.title)
 		})
 	}
 	if err != nil {
@@ -150,6 +150,9 @@ func (v *viewer) saveLogin(write func(string, *loginCredential) error) error {
 }
 
 func (v *viewer) forgetLogin() {
+	if v.loginTarget == "" {
+		v.loginTarget = loginTarget(v.pipe)
+	}
 	if err := deleteLogin(v.loginTarget); err != nil {
 		v.fail(err)
 		return

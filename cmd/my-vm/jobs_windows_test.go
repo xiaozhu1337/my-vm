@@ -31,7 +31,7 @@ func TestDiskJobAllowsNavigationAndBlocksSourceActions(t *testing.T) {
 		t.Fatal("background disk job blocked other machine navigation or editing")
 	}
 	click(t, tt, "取消")
-	click(t, tt, "Hyper-V 设置")
+	click(t, tt, "全局设置")
 	if a.page != "settings" || a.busy {
 		t.Fatal("background disk job blocked settings")
 	}
@@ -113,7 +113,7 @@ func TestMachineOperationAllowsNavigationAndOtherOperations(t *testing.T) {
 				t.Fatal("other machine editor was disabled")
 			}
 			click(t, tt, "取消")
-			click(t, tt, "Hyper-V 设置")
+			click(t, tt, "全局设置")
 			if a.page != "settings" || !a.beginOperation(second.ID, "启动另一台虚拟机") {
 				t.Fatal("operation blocked settings or another machine")
 			}

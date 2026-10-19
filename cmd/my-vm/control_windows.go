@@ -14,7 +14,7 @@ func (a *application) beginExternal(id, action string) error {
 			err = a.loadError
 			return
 		}
-		if a.busy || a.diskBusy(id) {
+		if a.busy || a.diskBusy(id) || a.diskBusy("host-network-change") {
 			err = errors.New("管理器正在操作此虚拟机或保存配置，请稍后重试")
 			return
 		}

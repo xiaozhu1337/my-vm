@@ -121,7 +121,16 @@ func (a *application) sidebar(c *ui.Context) {
 		if a.page == "settings" {
 			variant = components.ButtonSecondary
 		}
-		if components.Button(c, "Hyper-V 设置", variant).FillWidth().MinHeight(38).Clicked() && a.leavePage() {
+		settingsButton := components.Button(c, "全局设置", variant).FillWidth().MinHeight(38)
+		settingsButton.ContextMenu(func(menu *ui.Menu) {
+			for i, label := range []string{"运行环境", "虚拟网络", "主机网卡", "数据存储"} {
+				if menu.Item(label).Chosen() && a.leavePage() {
+					a.page = "settings"
+					a.settingsTab = i
+				}
+			}
+		})
+		if settingsButton.Clicked() && a.leavePage() {
 			a.page = "settings"
 			a.qemuDir = a.config.QEMUDir
 		}

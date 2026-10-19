@@ -7,9 +7,20 @@ import (
 	"golang.org/x/sys/windows"
 	"my-vm/internal/sharing"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 func Configuration(root string, m Machine, endpoint string) (map[string]any, error) {
+	var endpoints []string
+	if endpoint != "" && m.Network != "none" {
+		endpoints = []string{endpoint}
+	}
+	return ConfigurationWithEndpoints(root, m, endpoints)
+}
+
+// ConfigurationWithEndpoints accepts one endpoint per enabled NIC, primary first.
+func ConfigurationWithEndpoints(root string, m Machine, endpoints []string) (map[string]any, error) {
 	if err := requireHCS(m); err != nil {
 		return nil, err
 	}
@@ -22,9 +33,20 @@ func Configuration(root string, m Machine, endpoint string) (map[string]any, err
 	if err != nil {
 		return nil, err
 	}
+	return configurationWithEndpoints(root, m, endpoints, user.User.Sid.String())
+}
+
+// Keep schema construction pure so device validation never needs native services in tests.
+func configurationWithEndpoints(root string, m Machine, endpoints []string, sid string) (map[string]any, error) {
+	if err := requireHCS(m); err != nil {
+		return nil, err
+	}
+	if len(endpoints) != len(m.enabledNetworkAdapters()) {
+		return nil, fmt.Errorf("网络端点数量必须与已启用网卡数量一致")
+	}
 	pipe := `\\.\pipe\my-vm-` + m.ID
 	connection := func(name string) map[string]any {
-		return map[string]any{"NamedPipe": pipe + name, "AccessSids": []string{user.User.Sid.String()}}
+		return map[string]any{"NamedPipe": pipe + name, "AccessSids": []string{sid}}
 	}
 	attachments := map[string]any{"0": map[string]any{"Type": "VirtualDisk", "Path": DiskPath(root, m)}}
 	if m.ISO != "" {
@@ -39,11 +61,25 @@ func Configuration(root string, m Machine, endpoint string) (map[string]any, err
 		"Keyboard":          map[string]any{}, "Mouse": map[string]any{},
 		"Scsi": map[string]any{"my-vm-scsi": map[string]any{"Attachments": attachments}},
 	}
-	if m.Network != "none" {
-		if endpoint == "" {
-			return nil, fmt.Errorf("网络端点不能为空")
+	if len(endpoints) > 0 {
+		adapters := map[string]any{}
+		for _, endpoint := range endpoints {
+			if strings.TrimSpace(endpoint) == "" {
+				return nil, fmt.Errorf("网络端点不能为空")
+			}
+			if _, exists := adapters[endpoint]; exists {
+				return nil, fmt.Errorf("网络端点不能重复")
+			}
+			adapters[endpoint] = map[string]any{"EndpointId": endpoint}
 		}
-		devices["NetworkAdapters"] = map[string]any{endpoint: map[string]any{"EndpointId": endpoint}}
+		devices["NetworkAdapters"] = adapters
+	}
+	if len(m.COMPorts) > 0 {
+		ports := map[string]any{}
+		for _, port := range m.COMPorts {
+			ports[strconv.Itoa(port.Number-1)] = map[string]any{"NamedPipe": port.Pipe}
+		}
+		devices["ComPorts"] = ports
 	}
 	if len(m.Shares) > 0 || m.IsLinux() {
 		devices["HvSocket"] = map[string]any{"HvSocketConfig": map[string]any{"ServiceTable": map[string]any{sharing.ServiceGUID(): map[string]any{"AllowWildcardBinds": false, "BindSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)", "ConnectSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}}}}

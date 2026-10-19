@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo"
 	"my-vm/internal/hcs"
 	"my-vm/internal/logging"
+	"my-vm/internal/networkmgr"
 	"my-vm/internal/vm"
 )
 
@@ -32,6 +33,12 @@ type application struct {
 	diskJobs                                map[string]*diskJob
 	externalJobs                            map[string]bool
 	editVersion                             int
+	deviceOnly                              bool
+	settingsTab                             int
+	networkName, networkCIDR                string
+	managedNetworks                         []networkmgr.Record
+	hostAdapters                            []hostAdapter
+	networkDetails                          []networkmgr.Network
 	cloneSource                             *vm.Machine
 	listPage, filter, detailTab             int
 	draft, savedDraft                       vm.Machine
@@ -74,6 +81,7 @@ func (a *application) selectMachine(m vm.Machine, page string, tab int) bool {
 func (a *application) edit(m vm.Machine, creating bool) {
 	a.editVersion++
 	a.cloneSource = nil
+	a.deviceOnly = false
 	if m.GuestOS == "" {
 		m.GuestOS = "windows"
 	}
@@ -81,8 +89,12 @@ func (a *application) edit(m vm.Machine, creating bool) {
 		m.Display = "std"
 	}
 	m.Shares = slices.Clone(m.Shares)
+	m.NetworkAdapters = slices.Clone(m.NetworkAdapters)
+	m.COMPorts = slices.Clone(m.COMPorts)
 	a.draft = m
 	m.Shares = slices.Clone(m.Shares)
+	m.NetworkAdapters = slices.Clone(m.NetworkAdapters)
+	m.COMPorts = slices.Clone(m.COMPorts)
 	a.savedDraft = m
 	a.creating = creating
 	a.cpu = float64(m.CPUs)
@@ -92,6 +104,10 @@ func (a *application) edit(m vm.Machine, creating bool) {
 }
 
 func (a *application) saveDraft() {
+	if a.diskBusy("host-network-change") {
+		a.report(fmt.Errorf("全局网络正在变更，请完成后再保存虚拟机配置"))
+		return
+	}
 	m := a.draft
 	m.Name = strings.TrimSpace(m.Name)
 	m.CPUs = int(a.cpu)
@@ -139,7 +155,12 @@ func (a *application) finishEditing(machine vm.Machine, version int) {
 	if a.page == "edit" && a.draft.ID == machine.ID && a.editVersion == version {
 		if a.busy {
 			a.draft, a.savedDraft, a.creating = machine, machine, false
+			a.draft.Shares = slices.Clone(machine.Shares)
+			a.draft.NetworkAdapters = slices.Clone(machine.NetworkAdapters)
+			a.draft.COMPorts = slices.Clone(machine.COMPorts)
 			a.savedDraft.Shares = slices.Clone(machine.Shares)
+			a.savedDraft.NetworkAdapters = slices.Clone(machine.NetworkAdapters)
+			a.savedDraft.COMPorts = slices.Clone(machine.COMPorts)
 			return
 		}
 		a.selected, a.page, a.detailTab = machine.ID, "", 0

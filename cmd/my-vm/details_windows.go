@@ -55,7 +55,7 @@ func (a *application) details(c *ui.Context) {
 			metric(c, "内存", fmt.Sprintf("%g GiB", float64(memory)/1024), fmt.Sprintf("%d MiB 已分配", memory))
 			metric(c, "系统磁盘", fmt.Sprintf("%d GiB", m.DiskGiB), "VHDX / 按需占用")
 		})
-		card(c, "设备与连接", "在虚拟机右键菜单选择“编辑配置”可调整设备。", func() {
+		card(c, "设备与连接", "在虚拟机右键菜单选择“设备管理器”查看硬件和增删设备。", func() {
 			infoRow(c, "客户机系统", m.GuestName())
 			infoRow(c, "虚拟化引擎", "Hyper-V HCS")
 			network := "NAT / 共享主机网络"
@@ -65,6 +65,12 @@ func (a *application) details(c *ui.Context) {
 				network = "桥接 / " + m.SwitchID
 			}
 			infoRow(c, "网络", network)
+			if len(m.NetworkAdapters) > 0 {
+				infoRow(c, "附加网卡", fmt.Sprintf("%d 张", len(m.NetworkAdapters)))
+			}
+			if len(m.COMPorts) > 0 {
+				infoRow(c, "串口", fmt.Sprintf("%d 个 COM 端口", len(m.COMPorts)))
+			}
 			iso := m.ISO
 			if iso == "" {
 				iso = "未挂载 / 从硬盘启动"
@@ -91,7 +97,7 @@ func (a *application) details(c *ui.Context) {
 }
 
 func (a *application) machineMenu(menu *ui.Menu, m vm.Machine, state string) {
-	blocked := a.busy || a.loadError != nil || a.diskBusy(m.ID)
+	blocked := a.busy || a.loadError != nil || a.diskBusy(m.ID) || a.diskBusy("host-network-change")
 	editing := a.page == "edit" && a.draft.ID == m.ID
 	off, paused, hcs := state == "已关机", state == "已暂停", m.Backend == "hcs"
 	menu.Item(m.Name).Disabled(true)
@@ -124,6 +130,10 @@ func (a *application) machineMenu(menu *ui.Menu, m vm.Machine, state string) {
 		})
 	}
 	menu.Separator()
+	if menu.Item("设备管理器").Disabled(blocked || !hcs).Chosen() && a.leavePage() {
+		a.edit(m, false)
+		a.deviceOnly = true
+	}
 	if menu.Item("编辑配置").Disabled(blocked || !off).Chosen() && a.leavePage() {
 		a.edit(m, false)
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,25 +19,39 @@ import (
 )
 
 type Machine struct {
-	GuestOS       string  `yaml:"guest_os"`
-	LinuxDesktop  string  `yaml:"linux_desktop,omitempty"`
-	DynamicMemory bool    `yaml:"dynamic_memory"`
-	GPUShared     bool    `yaml:"gpu_shared"`
-	Backend       string  `yaml:"backend"`
-	SwitchID      string  `yaml:"switch_id"`
-	Clipboard     bool    `yaml:"clipboard"`
-	Shares        []Share `yaml:"shares,omitempty"`
-	ID            string  `yaml:"id"`
-	Name          string  `yaml:"name"`
-	CPUs          int     `yaml:"cpus"`
-	MemoryMiB     int     `yaml:"memory_mib"`
-	DiskGiB       int     `yaml:"disk_gib"`
-	ISO           string  `yaml:"iso"`
-	DriverISO     string  `yaml:"driver_iso"`
-	Display       string  `yaml:"display"`
-	Network       string  `yaml:"network"`
-	TAP           string  `yaml:"tap"`
-	Accelerator   string  `yaml:"accelerator"`
+	GuestOS         string           `yaml:"guest_os"`
+	LinuxDesktop    string           `yaml:"linux_desktop,omitempty"`
+	DynamicMemory   bool             `yaml:"dynamic_memory"`
+	GPUShared       bool             `yaml:"gpu_shared"`
+	Backend         string           `yaml:"backend"`
+	SwitchID        string           `yaml:"switch_id"`
+	Clipboard       bool             `yaml:"clipboard"`
+	Shares          []Share          `yaml:"shares,omitempty"`
+	ID              string           `yaml:"id"`
+	Name            string           `yaml:"name"`
+	CPUs            int              `yaml:"cpus"`
+	MemoryMiB       int              `yaml:"memory_mib"`
+	DiskGiB         int              `yaml:"disk_gib"`
+	ISO             string           `yaml:"iso"`
+	DriverISO       string           `yaml:"driver_iso"`
+	Display         string           `yaml:"display"`
+	Network         string           `yaml:"network"`
+	TAP             string           `yaml:"tap"`
+	NetworkAdapters []NetworkAdapter `yaml:"network_adapters,omitempty"`
+	COMPorts        []COMPort        `yaml:"com_ports,omitempty"`
+	Accelerator     string           `yaml:"accelerator"`
+}
+
+// NetworkAdapter describes an additional NIC; Network and SwitchID remain the primary NIC.
+type NetworkAdapter struct {
+	Network    string `yaml:"network"`
+	SwitchID   string `yaml:"switch_id"`
+	MACAddress string `yaml:"mac_address,omitempty"`
+}
+
+type COMPort struct {
+	Number int    `yaml:"number"`
+	Pipe   string `yaml:"pipe"`
 }
 
 type Share = sharing.Share
@@ -89,7 +104,78 @@ func (m Machine) Validate() error {
 	case m.Backend != "hcs" && m.Accelerator != "whpx":
 		return errors.New("仅支持硬件加速；旧配置请使用 whpx")
 	}
+	if err := m.validateDevices(); err != nil {
+		return err
+	}
 	return ValidateShares(m.Shares)
+}
+
+var validSwitchID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func (m Machine) validateDevices() error {
+	if len(m.NetworkAdapters) > 7 {
+		return errors.New("主网卡和附加网卡合计不能超过 8 张")
+	}
+	adapters := append([]NetworkAdapter{{Network: m.Network, SwitchID: m.SwitchID}}, m.NetworkAdapters...)
+	macs := map[string]bool{}
+	for i, adapter := range adapters {
+		if adapter.Network != "none" && adapter.Network != "nat" && adapter.Network != "bridge" {
+			return fmt.Errorf("网卡 %d 的网络模式必须为 none、nat 或 bridge", i+1)
+		}
+		switchID := adapter.SwitchID
+		if strings.HasPrefix(switchID, "{") && strings.HasSuffix(switchID, "}") {
+			switchID = switchID[1 : len(switchID)-1]
+		}
+		if adapter.SwitchID != "" && !validSwitchID.MatchString(switchID) {
+			return fmt.Errorf("网卡 %d 的交换机 ID 必须为 GUID", i+1)
+		}
+		if (m.Backend == "hcs" || i > 0) && adapter.Network == "bridge" && switchID == "" {
+			return fmt.Errorf("网卡 %d 的桥接模式需要指定交换机", i+1)
+		}
+		if adapter.MACAddress != "" {
+			mac, err := net.ParseMAC(adapter.MACAddress)
+			if err != nil || len(mac) != 6 || mac[0]&1 != 0 || mac.String() == "00:00:00:00:00:00" {
+				return fmt.Errorf("网卡 %d 的 MAC 必须为有效的 6 字节单播地址", i+1)
+			}
+			if macs[mac.String()] {
+				return errors.New("网卡 MAC 地址不能重复")
+			}
+			macs[mac.String()] = true
+		}
+	}
+	numbers, pipes := map[int]bool{}, map[string]bool{}
+	for _, port := range m.COMPorts {
+		if port.Number != 1 && port.Number != 2 || numbers[port.Number] {
+			return errors.New("串口只能为 COM1 或 COM2，且编号不能重复")
+		}
+		const prefix = `\\.\pipe\`
+		if !strings.HasPrefix(strings.ToLower(port.Pipe), prefix) {
+			return errors.New(`串口必须使用本机绝对命名管道 \\.\pipe\...`)
+		}
+		name := strings.ToLower(strings.TrimPrefix(strings.ToLower(port.Pipe), prefix))
+		if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "\\/\x00\r\n:*?\"<>|") || strings.HasPrefix(name, "my-vm-") {
+			return errors.New("串口管道名称无效或占用了 my-vm 控制台保留名称")
+		}
+		if pipes[name] {
+			return errors.New("串口管道不能重复")
+		}
+		numbers[port.Number], pipes[name] = true, true
+	}
+	return nil
+}
+
+// enabledNetworkAdapters returns the primary NIC first, followed by enabled additional NICs.
+func (m Machine) enabledNetworkAdapters() []NetworkAdapter {
+	adapters := make([]NetworkAdapter, 0, 1+len(m.NetworkAdapters))
+	if m.Network != "none" {
+		adapters = append(adapters, NetworkAdapter{Network: m.Network, SwitchID: m.SwitchID})
+	}
+	for _, adapter := range m.NetworkAdapters {
+		if adapter.Network != "none" {
+			adapters = append(adapters, adapter)
+		}
+	}
+	return adapters
 }
 
 func ValidateShares(shares []Share) error { return sharing.Validate(shares) }
@@ -122,24 +208,35 @@ func Load(path string) (Config, error) {
 		}
 		ids[m.ID] = true
 	}
+	if err = ValidateDeviceOwnership(cfg.Machines); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
 func Save(path string, cfg Config) error {
+	if err := ValidateDeviceOwnership(cfg.Machines); err != nil {
+		return err
+	}
 	var root yaml.Node
 	if err := root.Encode(cfg); err != nil {
 		return err
 	}
 	comments := map[string]string{
-		"guest_os":       "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
-		"linux_desktop":  "Linux 增强会话：wayland 使用 GNOME Remote Desktop 或 KDE KRdp，x11 使用 xrdp；Ubuntu 26 默认 wayland，旧 linux 默认 x11。",
-		"dynamic_memory": "允许 HCS 按需分配内存及运行中修改内存；实际回收能力取决于客户机集成驱动。",
-		"gpu_shared":     "启用 Hyper-V GPU-PV 共享，默认关闭；需要兼容主机和客户机驱动，不保证显卡支持。",
-		"backend":        "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",
-		"switch_id":      "HCN 交换机 GUID；NAT 留空时精确选择系统 Default Switch，桥接须指定现有外部交换机。",
-		"clipboard":      "允许增强会话的剪贴板重定向；可用格式由客户机远程桌面服务决定。",
-		"shares":         "映射到客户机的主机文件夹；默认只读。",
-		"path":           "主机文件夹的绝对路径。", "read_only": "true 只允许读取，false 允许修改主机文件。",
+		"network_adapters": "附加网卡，不包含 network/switch_id 指定的主网卡；合计最多 8 张。",
+		"mac_address":      "可选 6 字节单播 MAC 地址；留空由 HCN 随机分配，同一虚拟机不能重复。",
+		"com_ports":        "串口列表；仅支持 COM1、COM2，编号和管道均不能重复。",
+		"number":           "串口编号：1 表示 COM1，2 表示 COM2。",
+		"pipe":             `本机绝对命名管道 \\.\pipe\...；my-vm- 前缀保留给控制台。`,
+		"guest_os":         "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
+		"linux_desktop":    "Linux 增强会话：wayland 使用 GNOME Remote Desktop 或 KDE KRdp，x11 使用 xrdp；Ubuntu 26 默认 wayland，旧 linux 默认 x11。",
+		"dynamic_memory":   "允许 HCS 按需分配内存及运行中修改内存；实际回收能力取决于客户机集成驱动。",
+		"gpu_shared":       "启用 Hyper-V GPU-PV 共享，默认关闭；需要兼容主机和客户机驱动，不保证显卡支持。",
+		"backend":          "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",
+		"switch_id":        "HCN 交换机 GUID；NAT 留空时精确选择系统 Default Switch，桥接须指定现有外部交换机。",
+		"clipboard":        "允许增强会话的剪贴板重定向；可用格式由客户机远程桌面服务决定。",
+		"shares":           "映射到客户机的主机文件夹；默认只读。",
+		"path":             "主机文件夹的绝对路径。", "read_only": "true 只允许读取，false 允许修改主机文件。",
 		"qemu_dir": "旧版本的 QEMU 目录，仅为兼容读取保留，HCS 不使用。",
 		"machines": "虚拟机清单；HCS 磁盘位于同目录 machines/<id>/disk.vhdx。",
 		"id":       "内部唯一标识；请勿修改。", "name": "显示名称；共享项名称需为字母开头的英文、数字、下划线或连字符。", "cpus": "虚拟 CPU 数量。",
@@ -189,6 +286,34 @@ func Save(path string, cfg Config) error {
 		_ = os.Remove(temp)
 	}
 	return err
+}
+
+func ValidateDeviceOwnership(machines []Machine) error {
+	pipes, macs := map[string]string{}, map[string]string{}
+	for _, machine := range machines {
+		for _, port := range machine.COMPorts {
+			key := strings.ToLower(port.Pipe)
+			if owner, exists := pipes[key]; exists {
+				return fmt.Errorf("虚拟机「%s」和「%s」使用了相同串口管道", owner, machine.Name)
+			}
+			pipes[key] = machine.Name
+		}
+		for _, adapter := range machine.NetworkAdapters {
+			if adapter.Network == "none" || adapter.MACAddress == "" {
+				continue
+			}
+			mac, err := net.ParseMAC(adapter.MACAddress)
+			if err != nil {
+				return err
+			}
+			key := mac.String()
+			if owner, exists := macs[key]; exists {
+				return fmt.Errorf("虚拟机「%s」和「%s」使用了相同网卡 MAC 地址", owner, machine.Name)
+			}
+			macs[key] = machine.Name
+		}
+	}
+	return nil
 }
 
 func DiskPath(root string, m Machine) string {

@@ -14,6 +14,7 @@ func NewClone(source Machine, machines []Machine) Machine {
 	clone := source
 	clone.ID = NewMachine().ID
 	clone.Network, clone.SwitchID = "none", ""
+	clone.NetworkAdapters, clone.COMPorts = nil, nil
 	clone.ISO, clone.DriverISO, clone.Shares = "", "", nil
 	for number := 1; ; number++ {
 		suffix := " - 副本"

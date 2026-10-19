@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"my-vm/internal/console/renderhost"
 	"os"
 	"runtime"
 	"strings"
@@ -25,31 +26,37 @@ var atl = windows.NewLazySystemDLL("atl.dll")
 const dismissHeaderCommand = 100
 
 type viewer struct {
-	hwnd, header, headerClose, child            uintptr
-	headerHidden, statusError                   bool
-	toolbar                                     *consoleToolbar
-	machineID, linuxMode                        string
-	client, advanced                            *ole.IDispatch
-	context, connector, nonScriptable           *ole.IUnknown
-	displayClient                               *ole.IUnknown
-	callback                                    *connectorCallback
-	events                                      *sessionEvents
-	eventPoint                                  *ole.IConnectionPoint
-	eventCookie                                 uint32
-	loggedIn                                    bool
-	generation                                  uintptr
-	loginTarget, loginNotice                    string
-	pendingLogin, automaticLogin                *loginCredential
-	automatic, fallbackPending                  bool
-	fallbackReason                              string
-	enhanced, clipboard, linux, wayland, closed bool
-	stopBridge                                  func()
-	rdpPort                                     int
-	pipe, vmid, title, status                   string
-	log                                         io.Writer
-	layout                                      displaySettings
-	display                                     displayUpdate
-	displayError                                string
+	host                                             *renderhost.Host
+	renderer                                         *renderhost.Session
+	parent, parentPID, renderWindow                  uintptr
+	renderToken                                      string
+	renderGeneration                                 uint64
+	rendererMode, reportedConnected, reportedFailure bool
+	hwnd, header, headerClose, child                 uintptr
+	headerHidden, statusError                        bool
+	toolbar                                          *consoleToolbar
+	machineID, linuxMode                             string
+	client, advanced                                 *ole.IDispatch
+	context, connector, nonScriptable                *ole.IUnknown
+	displayClient                                    *ole.IUnknown
+	callback                                         *connectorCallback
+	events                                           *sessionEvents
+	eventPoint                                       *ole.IConnectionPoint
+	eventCookie                                      uint32
+	loggedIn                                         bool
+	generation                                       uintptr
+	loginTarget, loginNotice                         string
+	pendingLogin, automaticLogin                     *loginCredential
+	automatic, fallbackPending                       bool
+	fallbackReason                                   string
+	enhanced, clipboard, linux, wayland, closed      bool
+	stopBridge                                       func()
+	rdpPort                                          int
+	pipe, vmid, title, status                        string
+	log                                              io.Writer
+	layout                                           displaySettings
+	display                                          displayUpdate
+	displayError                                     string
 }
 
 var current *viewer
@@ -106,6 +113,11 @@ type windowClass struct {
 var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	v := current
 	switch msg {
+	case 0x8005:
+		if v != nil {
+			v.rendererCommands()
+		}
+		return 0
 	case 0x2b:
 		if v != nil && v.paintControl(lparam) {
 			return 1
@@ -144,21 +156,24 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			}
 		}
 		return 0
-	case 5, 0x113:
+	case 3, 5, 0x18, 0x113:
 		if v != nil && v.hwnd != 0 {
 			v.resize()
 			if msg == 0x113 {
+				v.pollRenderer()
 				v.checkEnhancedAvailability()
 			}
 		}
 		return 0
 	case 0x7:
-		if v != nil && v.child != 0 {
+		if v != nil && v.host != nil && v.host.Active != nil {
+			v.focusRenderer()
+		} else if v != nil && v.child != 0 {
 			user32.NewProc("SetFocus").Call(v.child)
 		}
 		return 0
 	case 0x24:
-		if v != nil {
+		if v != nil && !v.rendererMode {
 			var limits [10]int32
 			if err := windows.ReadProcessMemory(windows.CurrentProcess(), lparam, (*byte)(unsafe.Pointer(&limits)), unsafe.Sizeof(limits), nil); err == nil {
 				dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(hwnd)
@@ -192,11 +207,16 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 			return 0
 		}
 	case 0x112:
-		if v != nil && v.wayland && wparam&0xfff0 == forgetLoginCommand {
+		if v != nil && (v.wayland || v.host != nil && v.linux) && wparam&0xfff0 == forgetLoginCommand {
 			v.forgetLogin()
 			return 0
 		}
 	case 0x10:
+		if v != nil && v.host != nil {
+			v.close()
+			user32.NewProc("PostQuitMessage").Call(0)
+			return 0
+		}
 		if v != nil {
 			v.close()
 		}
@@ -231,9 +251,28 @@ func Run(args []string, log io.Writer) error {
 	flags.StringVar(&displayProbe, "detect-display", "", "")
 	flags.StringVar(&readinessProbe, "detect-ready", "", "")
 	flags.BoolVar(&v.automatic, "auto", false, "")
+	flags.BoolVar(&v.rendererMode, "renderer", false, "")
+	flags.Uint64Var(&v.renderGeneration, "render-generation", 0, "")
+	flags.StringVar(&v.renderToken, "render-token", "", "")
+	var parent, parentPID uint64
+	flags.Uint64Var(&parent, "parent", 0, "")
+	flags.Uint64Var(&parentPID, "parent-pid", 0, "")
 	flags.StringVar(&probe, "detect-desktop", "", "")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	v.parent, v.parentPID = uintptr(parent), uintptr(parentPID)
+	if v.rendererMode {
+		if parent == 0 || parentPID == 0 || !v.validParent() || v.automatic {
+			return fmt.Errorf("控制台渲染参数无效")
+		}
+		session, err := renderhost.Open(os.Stdin, os.Stdout, v.renderToken, v.renderGeneration)
+		if err != nil {
+			return err
+		}
+		v.renderer = session
+	} else if parent != 0 || parentPID != 0 || v.renderToken != "" || v.renderGeneration != 0 {
+		return fmt.Errorf("控制台渲染参数无效")
 	}
 	if readinessProbe != "" && probe == "" && displayProbe == "" && flags.NArg() == 1 && v.pipe == "" && !v.enhanced && !v.automatic && !v.linux && !v.wayland && !x11 {
 		kind := flags.Arg(0)
@@ -276,32 +315,28 @@ func Run(args []string, log io.Writer) error {
 	if v.machineID == "" {
 		v.machineID = machineIDFromPipe(v.pipe)
 	}
-	if v.automatic {
-		kind := "windows"
-		if v.linux {
+	v.enhanced = renderhost.InitialEnhanced(v.automatic, v.enhanced)
+	if !v.rendererMode {
+		v.wayland = false
+	}
+	if v.rendererMode && v.enhanced && v.linux {
+		kind := v.linuxMode
+		if kind == "" {
 			kind = "linux"
-			if v.wayland {
-				kind = "wayland"
-			} else if x11 {
-				kind = "x11"
-			}
 		}
 		capability := probeDisplay(v.vmid, kind, log)
-		v.enhanced = capability.Mode != ""
+		if capability.Mode == "" {
+			v.connectionFailed(fmt.Errorf("客户机增强画面尚未就绪，保留当前画面"))
+			return nil
+		}
 		v.wayland = capability.Mode == "wayland"
 		v.automaticLogin = capability.login()
 		defer v.automaticLogin.clear()
-		if v.enhanced {
-			v.pipe = strings.TrimSuffix(v.pipe, ".basic") + ".enhanced"
-		}
-	}
-	if v.enhanced && v.linux && !v.wayland && !x11 && !v.automatic {
-		v.wayland = detectLinuxWayland(v.vmid, log)
 	}
 	if !v.enhanced {
 		v.wayland = false
 	}
-	if v.wayland {
+	if v.rendererMode && v.wayland {
 		port, stop, err := linuxWaylandBridge(v.vmid, log)
 		if err != nil {
 			return err
@@ -309,7 +344,7 @@ func Run(args []string, log io.Writer) error {
 		v.rdpPort = port
 		v.stopBridge = stop
 		defer stop()
-	} else if v.enhanced && v.linux {
+	} else if v.rendererMode && v.enhanced && v.linux {
 		v.pipe += fmt.Sprintf(".linux-%d", os.Getpid())
 		stop, err := linuxBridge(v.pipe, v.vmid, log)
 		if err != nil {
@@ -318,12 +353,15 @@ func Run(args []string, log io.Writer) error {
 		v.stopBridge = stop
 		defer stop()
 	}
-	ole32 := windows.NewLazySystemDLL("ole32.dll")
-	hr, _, _ := ole32.NewProc("OleInitialize").Call(0)
-	if int32(hr) < 0 {
-		return fmt.Errorf("初始化 OLE 失败: 0x%08X", uint32(hr))
+	if v.rendererMode {
+		ole32 := windows.NewLazySystemDLL("ole32.dll")
+		hr, _, _ := ole32.NewProc("OleInitialize").Call(0)
+		if int32(hr) < 0 {
+			v.connectionFailed(fmt.Errorf("初始化 OLE 失败: 0x%08X", uint32(hr)))
+			return nil
+		}
+		defer ole32.NewProc("OleUninitialize").Call()
 	}
-	defer ole32.NewProc("OleUninitialize").Call()
 	user32.NewProc("SetProcessDpiAwarenessContext").Call(^uintptr(3))
 	class := windowClass{Size: uint32(unsafe.Sizeof(windowClass{})), Procedure: procedure, Background: 6, Name: windows.StringToUTF16Ptr("MyVM.HCS.Console")}
 	class.Instance, _, _ = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetModuleHandleW").Call(0)
@@ -338,33 +376,46 @@ func Run(args []string, log io.Writer) error {
 	if v.enhanced {
 		mode = "增强会话"
 	}
-	v.hwnd, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("VM · "+v.title+" · "+mode))), 0x02cf0000, 100, 100, 1400, 900, 0, 0, 0, 0)
+	style, extendedStyle := uintptr(0x02cf0000), uintptr(0)
+	width, height := uintptr(1400), uintptr(900)
+	if v.rendererMode {
+		// Independent popup and input queue: the host is only an authenticated IPC destination.
+		style, extendedStyle, width, height = 0x86000000, 0x80, 1, 1
+	}
+	v.hwnd, _, _ = user32.NewProc("CreateWindowExW").Call(extendedStyle, uintptr(unsafe.Pointer(class.Name)), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("VM · "+v.title+" · "+mode))), style, 100, 100, width, height, 0, 0, 0, 0)
 	if v.hwnd == 0 {
 		return fmt.Errorf("创建控制台窗口失败")
 	}
-	v.header, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("STATIC"))), 0, 0x5000000d, 12, 10, 1300, 32, v.hwnd, 0, 0, 0)
-	v.headerClose, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("关闭提示"))), 0x5001000b, 0, 0, 24, 24, v.hwnd, dismissHeaderCommand, 0, 0)
-	if v.header == 0 || v.headerClose == 0 {
-		return fmt.Errorf("创建控制台提示栏失败")
+	if !v.rendererMode {
+		v.header, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("STATIC"))), 0, 0x5000000d, 12, 10, 1300, 32, v.hwnd, 0, 0, 0)
+		v.headerClose, _, _ = user32.NewProc("CreateWindowExW").Call(0, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("BUTTON"))), uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("关闭提示"))), 0x5001000b, 0, 0, 24, 24, v.hwnd, dismissHeaderCommand, 0, 0)
+		if v.header == 0 || v.headerClose == 0 {
+			return fmt.Errorf("创建控制台提示栏失败")
+		}
+		if err := v.createToolbar(); err != nil {
+			return err
+		}
+		defer v.toolbar.painter.Close()
+		defer v.toolbar.cancel()
 	}
-	if err := v.createToolbar(); err != nil {
-		return err
-	}
-	defer v.toolbar.painter.Close()
-	defer v.toolbar.cancel()
 	defer v.close()
 	v.setStatus(mode + " · 正在连接客户机…")
 	if v.wayland {
 		v.setStatus("正在连接 Linux 桌面 · 请完成凭据和证书确认，窗口将保持打开")
 	}
-	user32.NewProc("ShowWindow").Call(v.hwnd, 5)
-	if v.wayland {
-		v.addLoginMenu()
-	}
-	if err := v.initialize(); err != nil {
-		v.fail(err)
-		if v.automatic && v.enhanced {
-			v.fallbackBasic()
+	if !v.rendererMode {
+		user32.NewProc("ShowWindow").Call(v.hwnd, 5)
+		if v.linux {
+			v.addLoginMenu()
+		}
+		v.startRenderHost()
+	} else {
+		// A visible, tiny renderer owns authentication UI without covering the working basic view.
+		user32.NewProc("ShowWindow").Call(v.hwnd, 4)
+		v.renderer.Report("window", v.hwnd)
+		v.renderer.Listen(func() { user32.NewProc("PostMessageW").Call(v.hwnd, 0x8005, 0, 0) })
+		if err := v.initialize(); err != nil {
+			v.connectionFailed(err)
 		}
 	}
 	user32.NewProc("SetTimer").Call(v.hwnd, 1, 300, 0)
@@ -377,14 +428,20 @@ func Run(args []string, log io.Writer) error {
 		if ok == 0 {
 			break
 		}
-		guestInput, _, _ := user32.NewProc("IsChild").Call(v.child, msg.Window)
-		if (msg.Window == v.child || guestInput != 0) && ((msg.Message >= 0x100 && msg.Message <= 0x109) || (msg.Message >= 0x200 && msg.Message <= 0x20e)) {
+		guestInput := uintptr(0)
+		if v.rendererMode {
+			guestInput, _, _ = user32.NewProc("IsChild").Call(v.child, msg.Window)
+		}
+		if v.rendererMode && (msg.Window == v.child || guestInput != 0) && ((msg.Message >= 0x100 && msg.Message <= 0x109) || (msg.Message >= 0x200 && msg.Message <= 0x20e)) {
 			handled, _, _ := user32.NewProc("SendMessageW").Call(v.child, 0x37f, 0, uintptr(unsafe.Pointer(&msg)))
 			if handled != 0 {
 				continue
 			}
 		}
-		if guestInput == 0 && msg.Window != v.child && msg.Message >= 0x100 && msg.Message <= 0x109 {
+		if v.host != nil && v.toolbarNavigation(msg) {
+			continue
+		}
+		if v.host == nil && guestInput == 0 && msg.Window != v.child && msg.Message >= 0x100 && msg.Message <= 0x109 {
 			handled, _, _ := user32.NewProc("IsDialogMessageW").Call(v.hwnd, uintptr(unsafe.Pointer(&msg)))
 			if handled != 0 {
 				continue
@@ -419,9 +476,9 @@ func (v *viewer) initialize() error {
 		if err = v.client.PutQueryInterface(ole.NewGUID("{28904001-04B6-436C-A55B-0AF1A0883DC9}"), &v.displayClient); err != nil {
 			return err
 		}
-		if err = v.initializeEvents(); err != nil {
-			return err
-		}
+	}
+	if err = v.initializeEvents(); err != nil {
+		return err
 	}
 	v.advanced, err = property(v.client, "AdvancedSettings9")
 	if err != nil {
@@ -468,7 +525,7 @@ func (v *viewer) initialize() error {
 	if err = v.client.PutQueryInterface(ole.NewGUID("{71B4A60A-FE21-46D8-A39B-8E32BA0C5ECC}"), &v.nonScriptable); err != nil {
 		return err
 	}
-	if err = call(v.nonScriptable, 15, v.hwnd); err != nil {
+	if err = call(v.nonScriptable, 15, v.owner()); err != nil {
 		return err
 	}
 	if err = call(v.nonScriptable, 39, 0xffff); err != nil {
@@ -503,6 +560,10 @@ func (v *viewer) initialize() error {
 	return call(v.connector, 5, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(v.pipe))))
 }
 func (v *viewer) resize() {
+	if v.host != nil {
+		v.resizeRenderer()
+		return
+	}
 	if v.closed || v.child == 0 {
 		return
 	}
@@ -514,6 +575,18 @@ func (v *viewer) resize() {
 	}
 	top, settings := v.contentLayout(rect.Right, rect.Bottom, dpi)
 	width, height := settings.width, settings.height
+	if v.client == nil {
+		return
+	}
+	result, err := oleutil.GetProperty(v.client, "Connected")
+	connected := err == nil && result.Val == 1
+	if result != nil {
+		_ = result.Clear()
+	}
+	if connected && v.renderer != nil && !v.reportedConnected {
+		v.reportedConnected = true
+		v.renderer.Report("connected", v.hwnd)
+	}
 	if width < 200 || height < 200 {
 		return
 	}
@@ -523,14 +596,6 @@ func (v *viewer) resize() {
 		v.layoutNotice(width, top, barHeight, dpi)
 		user32.NewProc("MoveWindow").Call(v.child, 0, uintptr(top), uintptr(width), uintptr(height), 1)
 		v.layout = settings
-	}
-	if v.client == nil {
-		return
-	}
-	result, err := oleutil.GetProperty(v.client, "Connected")
-	connected := err == nil && result.Val == 1
-	if result != nil {
-		_ = result.Clear()
 	}
 	if connected && !v.display.connected {
 		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
@@ -567,6 +632,10 @@ func (v *viewer) close() {
 	}
 	v.closed = true
 	v.generation++
+	if v.host != nil {
+		v.host.Close()
+		return
+	}
 	if v.stopBridge != nil {
 		v.stopBridge()
 		v.stopBridge = nil

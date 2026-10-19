@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"my-vm/internal/console/renderhost"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -137,33 +140,47 @@ func TestToolbarResultSurvivesConnectionStatusRefresh(t *testing.T) {
 	}
 }
 
-func TestStatusNoticeUnknownAndRearming(t *testing.T) {
-	for _, test := range []struct {
-		state            string
-		linux, connected bool
-		prompt           toolbarPrompt
-	}{{"unknown", false, true, promptEnhancedTry}, {"available", false, true, promptEnhancedTry}, {"waiting", false, true, promptNone}, {"unsupported", false, true, promptNone}, {"unknown", true, true, promptNone}, {"unknown", false, false, promptNone}, {"ready", false, true, promptEnhanced}} {
-		bar := &consoleToolbar{availability: enhancedAvailability{results: make(chan string, 1)}}
-		bar.availability.results <- test.state
-		v := &viewer{toolbar: bar, linux: test.linux, headerHidden: true, display: displayUpdate{connected: test.connected}, log: io.Discard}
+func TestAutomaticReadyStartsCandidateWithoutConfirmation(t *testing.T) {
+	for _, state := range []string{"ready", "unknown", "available", "waiting", "unsupported", "unavailable"} {
+		t.Run(state, func(t *testing.T) {
+			host := renderhost.New(func(*renderhost.Worker) *exec.Cmd {
+				return exec.Command(os.Args[0], "-test.run=^$")
+			})
+			bar := &consoleToolbar{availability: enhancedAvailability{checking: true, results: make(chan string, 1)}}
+			bar.availability.results <- state
+			v := &viewer{host: host, automatic: true, toolbar: bar, headerHidden: true, log: io.Discard}
+			v.enhancedAvailabilityResult()
+			candidate := host.Candidate
+			host.Close()
+			if candidate != nil {
+				select {
+				case <-candidate.Done():
+				case <-time.After(3 * time.Second):
+					t.Fatal("owned test process survived close")
+				}
+			}
+			if bar.prompt != promptNone || bar.availability.checking || (candidate != nil) != (state == "ready") {
+				t.Fatal("readiness did not automatically start exactly one positive candidate")
+			}
+			if candidate != nil && (!candidate.Enhanced || v.enhanced) {
+				t.Fatal("candidate did not preserve basic until connected")
+			}
+		})
+	}
+}
+
+func TestManualBasicNeverOffersEnhancement(t *testing.T) {
+	for _, state := range []string{"ready", "unknown", "available", "waiting", "unsupported", "unavailable"} {
+		bar := &consoleToolbar{availability: enhancedAvailability{checking: true, results: make(chan string, 1)}}
+		bar.availability.results <- state
+		v := &viewer{toolbar: bar, headerHidden: true, display: displayUpdate{connected: true}, log: io.Discard}
 		v.enhancedAvailabilityResult()
-		if bar.prompt != test.prompt {
-			t.Fatalf("state=%s prompt=%d want=%d", test.state, bar.prompt, test.prompt)
+		if bar.prompt != promptNone || bar.availability.notified || bar.availability.checking || v.enhanced || !v.headerHidden {
+			t.Fatalf("manual basic was interrupted by readiness state %q", state)
 		}
-		if test.prompt == promptNone {
-			continue
-		}
-		if v.headerHidden {
-			t.Fatal("offer remained hidden")
-		}
-		v.clearPrompt()
-		if bar.availability.notified || !bar.availability.next.After(time.Now()) {
-			t.Fatal("programmatic cleanup consumed offer permanently")
-		}
-		v.showPrompt(test.prompt)
-		v.finishPrompt(false)
-		if !bar.availability.notified {
-			t.Fatal("explicit refusal did not suppress further offers")
+		v.checkEnhancedAvailability()
+		if bar.availability.checking {
+			t.Fatal("manual basic started a readiness probe")
 		}
 	}
 }
@@ -239,19 +256,11 @@ func TestInlineNoticesRequireAUserDecision(t *testing.T) {
 	v := &viewer{toolbar: bar, headerHidden: true, log: io.Discard}
 	bar.availability.results <- "ready"
 	v.enhancedAvailabilityResult()
-	if v.enhanced || bar.busy || bar.prompt != promptEnhanced || v.headerHidden || !bar.availability.notified {
-		t.Fatal("readiness switched the display or failed to show a notice")
-	}
-	v.setStatus("已连接")
-	if !strings.Contains(v.status, "增强画面已就绪") {
-		t.Fatal("the connection timer overwrote an unanswered offer")
+	if v.enhanced || bar.busy || bar.prompt != promptNone || !v.headerHidden || bar.availability.notified {
+		t.Fatal("manual basic was changed by a readiness result")
 	}
 	if v.toolbarCommand(toolbarConfirm, 0) {
 		t.Fatal("an untrusted command without a source control was accepted")
-	}
-	v.finishPrompt(false)
-	if v.enhanced || bar.prompt != promptNone || !v.headerHidden {
-		t.Fatal("declining an offer changed the display")
 	}
 
 	bar.buttons = []toolbarButton{{id: toolbarShutdown, handle: 501}}

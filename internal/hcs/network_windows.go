@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"golang.org/x/sys/windows"
+	"net"
 	"strings"
 	"unsafe"
 )
@@ -57,7 +58,11 @@ func Networks() ([]Network, error) {
 
 type Endpoint struct{ ID windows.GUID }
 
-func CreateEndpoint(switchID, owner string) (*Endpoint, error) {
+func CreateEndpoint(switchID, owner string, mac ...string) (*Endpoint, error) {
+	settings, err := endpointSettings(switchID, owner, mac...)
+	if err != nil {
+		return nil, err
+	}
 	guid, err := windows.GUIDFromString("{" + strings.Trim(switchID, "{}") + "}")
 	if err != nil {
 		return nil, fmt.Errorf("交换机 ID 无效: %w", err)
@@ -73,15 +78,30 @@ func CreateEndpoint(switchID, owner string) (*Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	settings, _ := json.Marshal(map[string]any{"SchemaVersion": map[string]int{"Major": 2, "Minor": 0}, "Owner": owner, "HostComputeNetwork": switchID})
+	data, _ := json.Marshal(settings)
 	detail = nil
-	hr, _, _ = network.NewProc("HcnCreateEndpoint").Call(net, uintptr(unsafe.Pointer(&id)), uintptr(unsafe.Pointer(wide(string(settings)))), uintptr(unsafe.Pointer(&endpoint)), uintptr(unsafe.Pointer(&detail)))
+	hr, _, _ = network.NewProc("HcnCreateEndpoint").Call(net, uintptr(unsafe.Pointer(&id)), uintptr(unsafe.Pointer(wide(string(data)))), uintptr(unsafe.Pointer(&endpoint)), uintptr(unsafe.Pointer(&detail)))
 	if err = check("HcnCreateEndpoint", hr, resultText(detail)); err != nil {
 		return nil, err
 	}
 	network.NewProc("HcnCloseEndpoint").Call(endpoint)
 	return &Endpoint{ID: id}, nil
 }
+func endpointSettings(switchID, owner string, mac ...string) (map[string]any, error) {
+	if len(mac) > 1 {
+		return nil, fmt.Errorf("每个网络端点只能指定一个 MAC 地址")
+	}
+	settings := map[string]any{"SchemaVersion": map[string]int{"Major": 2, "Minor": 0}, "Owner": owner, "HostComputeNetwork": switchID}
+	if len(mac) == 1 && mac[0] != "" {
+		address, err := net.ParseMAC(mac[0])
+		if err != nil || len(address) != 6 || address[0]&1 != 0 || address.String() == "00:00:00:00:00:00" {
+			return nil, fmt.Errorf("MAC 必须为有效的 6 字节单播地址")
+		}
+		settings["MacAddress"] = strings.ToUpper(strings.ReplaceAll(address.String(), ":", "-"))
+	}
+	return settings, nil
+}
+
 func (e *Endpoint) Close() error {
 	if e == nil {
 		return nil

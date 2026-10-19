@@ -142,11 +142,11 @@ func (v *viewer) layoutToolbar(dpi uintptr) {
 		enabled := !v.toolbar.busy
 		switch button.id {
 		case toolbarBasic:
-			enabled = enabled && v.enhanced
+			enabled = enabled && (v.enhanced || v.automatic || v.host != nil && (!v.host.Active.BasicConnected() || v.host.Candidate != nil))
 		case toolbarEnhanced:
-			enabled = enabled && !v.enhanced
+			enabled = enabled && !v.enhanced && (v.host == nil || v.host.Candidate == nil)
 		case toolbarKeys:
-			enabled = enabled && v.nonScriptable != nil
+			enabled = enabled && (v.nonScriptable != nil || v.host != nil && v.host.Active != nil && v.host.Active.Connected)
 		case toolbarPause, toolbarShutdown:
 			enabled = enabled && v.machineID != ""
 		case toolbarFullscreen:
@@ -184,7 +184,7 @@ func (v *viewer) toolbarCommand(id, source uintptr) bool {
 		}
 		switch id {
 		case toolbarBasic:
-			if v.enhanced {
+			if v.host != nil || v.enhanced {
 				v.switchDisplay(false, false)
 			}
 		case toolbarEnhanced:
@@ -211,11 +211,56 @@ func (v *viewer) toolbarCommand(id, source uintptr) bool {
 	return false
 }
 
+func (v *viewer) toolbarNavigation(msg message) bool {
+	if msg.Message != 0x100 || msg.WParam != 9 || v.toolbar == nil {
+		return false
+	}
+	// Enumerate only our controls; IsDialogMessage can synchronously query the renderer.
+	controls := make([]uintptr, 0, 10)
+	for _, button := range v.toolbar.buttons {
+		enabled, _, _ := user32.NewProc("IsWindowEnabled").Call(button.handle)
+		if enabled != 0 {
+			controls = append(controls, button.handle)
+		}
+	}
+	if v.toolbar.prompt != promptNone {
+		controls = append(controls, v.toolbar.confirmButton, v.toolbar.cancelButton)
+	}
+	if !v.headerHidden {
+		controls = append(controls, v.headerClose)
+	}
+	if len(controls) == 0 {
+		return false
+	}
+	focus, _, _ := user32.NewProc("GetFocus").Call()
+	index := -1
+	for i, handle := range controls {
+		if handle == focus {
+			index = i
+			break
+		}
+	}
+	shift, _, _ := user32.NewProc("GetKeyState").Call(0x10)
+	if shift&0x8000 != 0 {
+		index = (index - 1 + len(controls)) % len(controls)
+	} else {
+		index = (index + 1) % len(controls)
+	}
+	user32.NewProc("SetFocus").Call(controls[index])
+	return true
+}
+
 func controlAltDeleteKeys() ([6]int16, [6]uint32) {
 	return [6]int16{0, 0, 0, -1, -1, -1}, [6]uint32{0x001d0001, 0x00380001, 0x21530001, 0xe1530001, 0xe0380001, 0xc01d0001}
 }
 
 func (v *viewer) sendControlAltDelete() error {
+	if v.host != nil {
+		if v.host.Active == nil || !v.host.Active.Connected || !v.host.Active.Send("keys") {
+			return errors.New("请先连接客户机画面，再发送 Ctrl+Alt+Del")
+		}
+		return nil
+	}
 	if v.nonScriptable == nil || !v.display.connected {
 		return errors.New("请先连接客户机画面，再发送 Ctrl+Alt+Del")
 	}
