@@ -4,10 +4,61 @@ package console
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	ole "github.com/go-ole/go-ole"
+	"go.yaml.in/yaml/v3"
 )
+
+const connectedNotice = "已连接 · 关闭控制台后虚拟机继续运行"
+
+func noticePreferencePath() (string, error) {
+	dir, err := os.UserConfigDir()
+	return filepath.Join(dir, "my-vm", "console.yaml"), err
+}
+
+func (v *viewer) loadNoticePreference() {
+	path, err := noticePreferencePath()
+	if err == nil {
+		var data []byte
+		data, err = os.ReadFile(path)
+		if err == nil {
+			var settings struct {
+				HideConnectedNotice bool `yaml:"hide_connected_notice"`
+			}
+			err = yaml.Unmarshal(data, &settings)
+			if err == nil {
+				v.hideConnectedNotice = settings.HideConnectedNotice
+			}
+		}
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) && v.log != nil {
+		fmt.Fprintln(v.log, "读取控制台通知设置失败:", err)
+	}
+}
+
+func (v *viewer) canHideConnectedNotice() bool {
+	return v.status == connectedNotice && !v.statusError && (v.toolbar == nil || v.toolbar.prompt == promptNone && v.toolbar.notice == "")
+}
+
+func (v *viewer) suppressConnectedNotice() {
+	path, err := noticePreferencePath()
+	if err == nil {
+		err = os.MkdirAll(filepath.Dir(path), 0700)
+	}
+	if err == nil {
+		err = os.WriteFile(path, []byte("# Hide the routine connected notice in future console windows.\nhide_connected_notice: true\n"), 0600)
+	}
+	if err != nil {
+		v.toolbarError(fmt.Errorf("保存控制台通知设置失败: %w", err))
+		return
+	}
+	v.hideConnectedNotice = true
+	v.dismissHeader()
+}
 
 type displaySettings struct {
 	width, height int32
@@ -35,6 +86,13 @@ func (v *viewer) dismissHeader() {
 	v.clearPrompt()
 	if declined {
 		v.toolbar.availability.notified = true
+	}
+	if v.toolbar != nil {
+		for _, handle := range []uintptr{v.toolbar.confirmButton, v.toolbar.cancelButton} {
+			if handle != 0 {
+				user32.NewProc("ShowWindow").Call(handle, 0)
+			}
+		}
 	}
 	for _, handle := range []uintptr{v.header, v.headerClose} {
 		if handle != 0 {

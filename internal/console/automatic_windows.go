@@ -447,7 +447,7 @@ func (v *viewer) pollRenderer() {
 			}
 			caption := windows.StringToUTF16Ptr("VM · " + v.title + " · " + mode)
 			user32.NewProc("SetWindowTextW").Call(v.hwnd, uintptr(unsafe.Pointer(caption)))
-			v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
+			v.setStatus(connectedNotice)
 			v.focusRenderer()
 		}
 	}

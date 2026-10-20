@@ -84,6 +84,7 @@ func machineIDFromPipe(pipe string) string {
 }
 
 func (v *viewer) createToolbar() error {
+	v.loadNoticePreference()
 	ctx, cancel := context.WithCancel(context.Background())
 	v.toolbar = &consoleToolbar{painter: &chrome.Painter{}, ctx: ctx, cancel: cancel, results: make(chan toolbarResult, 1), buttons: []toolbarButton{
 		{id: toolbarBasic, label: "基础", width: 60},
@@ -167,6 +168,12 @@ func (v *viewer) toolbarCommand(id, source uintptr) bool {
 		return false
 	}
 	bar := v.toolbar
+	if id == toolbarConfirm && source != 0 && source == bar.confirmButton && !v.headerHidden && v.canHideConnectedNotice() {
+		if !bar.busy {
+			v.suppressConnectedNotice()
+		}
+		return true
+	}
 	if bar.prompt != promptNone && ((id == toolbarConfirm && source == bar.confirmButton && source != 0) || (id == toolbarCancel && source == bar.cancelButton && source != 0)) {
 		if !bar.busy {
 			v.finishPrompt(id == toolbarConfirm)
@@ -226,6 +233,8 @@ func (v *viewer) toolbarNavigation(msg message) bool {
 	}
 	if v.toolbar.prompt != promptNone {
 		controls = append(controls, v.toolbar.confirmButton, v.toolbar.cancelButton)
+	} else if !v.headerHidden && v.canHideConnectedNotice() {
+		controls = append(controls, v.toolbar.confirmButton)
 	}
 	if !v.headerHidden {
 		controls = append(controls, v.headerClose)
@@ -462,12 +471,15 @@ func (v *viewer) layoutNotice(width, top, barHeight int32, dpi uintptr) {
 	user32.NewProc("MoveWindow").Call(v.headerClose, uintptr(x), uintptr(barHeight+unit(4)), uintptr(unit(24)), uintptr(unit(24)), 1)
 	if bar != nil {
 		_, confirm, cancel := bar.prompt.labels()
+		if v.canHideConnectedNotice() {
+			confirm = "不再提示"
+		}
 		for _, button := range []struct {
 			window uintptr
 			text   string
 		}{{bar.cancelButton, cancel}, {bar.confirmButton, confirm}} {
 			visible := uintptr(0)
-			if show && bar.prompt != promptNone {
+			if show && button.text != "" {
 				visible = 5
 				x -= unit(88)
 				user32.NewProc("SetWindowTextW").Call(button.window, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(button.text))))
@@ -513,7 +525,10 @@ func (v *viewer) paintControl(address uintptr) bool {
 		style = chrome.Button{Close: true}
 	case bar.confirmButton:
 		_, text, _ := bar.prompt.labels()
-		style = chrome.Button{Text: text, Primary: true}
+		if v.canHideConnectedNotice() {
+			text = "不再提示"
+		}
+		style = chrome.Button{Text: text, Primary: bar.prompt != promptNone}
 	case bar.cancelButton:
 		_, _, text := bar.prompt.labels()
 		style = chrome.Button{Text: text}

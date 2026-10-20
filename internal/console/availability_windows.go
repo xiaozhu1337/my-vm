@@ -239,7 +239,9 @@ func (v *viewer) applyEnhancedAvailability(state string) {
 	if !v.automatic || v.enhanced || v.host == nil || v.host.Candidate != nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
 		return
 	}
-	if a.finish(renderhost.ShouldUpgrade(v.automatic, state)) {
+	// HCS guests may have no WMI registration or agent; connecting triggers Windows' display service.
+	windowsAttempt := !v.linux && v.automatic && v.host.Active.BasicConnected() && (state == "available" || state == "unknown" || state == "unavailable")
+	if a.finish(renderhost.ShouldUpgrade(v.automatic, state) || windowsAttempt) {
 		v.switchRenderer(true, true)
 	}
 }

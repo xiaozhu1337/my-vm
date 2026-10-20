@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -329,6 +330,56 @@ func TestAutomaticReadyStartsCandidateWithoutConfirmation(t *testing.T) {
 			}
 			if candidate != nil && (!candidate.Enhanced || v.enhanced) {
 				t.Fatal("candidate did not preserve basic until connected")
+			}
+		})
+	}
+}
+
+func TestWindowsAutomaticEnhancementWithoutReadyProvider(t *testing.T) {
+	for _, test := range []struct {
+		name, state                          string
+		linux, manual, disconnected, blocked bool
+		want                                 bool
+	}{
+		{name: "Windows service triggers on connect", state: "available", want: true},
+		{name: "HCS guest without WMI registration", state: "unknown", want: true},
+		{name: "legacy guest without status provider", state: "unavailable", want: true},
+		{name: "wait for basic connection", state: "unknown", disconnected: true},
+		{name: "manual basic stays basic", state: "unknown", manual: true},
+		{name: "Linux still needs ready", state: "available", linux: true},
+		{name: "unknown Linux stays basic", state: "unknown", linux: true},
+		{name: "known waiting stays basic", state: "waiting"},
+		{name: "unsupported stays basic", state: "unsupported"},
+		{name: "user operation takes precedence", state: "unknown", blocked: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			host := renderhost.New(func(*renderhost.Worker) *exec.Cmd {
+				cmd := exec.Command(os.Args[0], "-test.run=^$")
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+				return cmd
+			})
+			t.Cleanup(func() {
+				host.Close()
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				host.Wait(ctx)
+			})
+			host.Active = &renderhost.Worker{Connected: !test.disconnected}
+			bar := &consoleToolbar{busy: test.blocked}
+			v := &viewer{host: host, automatic: !test.manual, linux: test.linux, toolbar: bar, log: io.Discard}
+			v.applyEnhancedAvailability(test.state)
+			if (host.Candidate != nil) != test.want || bar.prompt != promptNone {
+				t.Fatalf("candidate=%v, want=%v, prompt=%v", host.Candidate != nil, test.want, bar.prompt)
+			}
+			if test.want {
+				if !host.Candidate.Enhanced || !bar.availability.notified {
+					t.Fatal("automatic attempt did not select enhanced mode")
+				}
+				host.Cancel()
+				v.applyEnhancedAvailability(test.state)
+				if host.Candidate != nil {
+					t.Fatal("automatic attempt repeated after failure or cancellation")
+				}
 			}
 		})
 	}

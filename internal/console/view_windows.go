@@ -40,6 +40,7 @@ type viewer struct {
 	hostTopmost, adjustingLayer                                 bool
 	hwnd, header, headerClose, child                            uintptr
 	headerHidden, statusError                                   bool
+	hideConnectedNotice                                         bool
 	toolbar                                                     *consoleToolbar
 	machineID, linuxMode                                        string
 	client, advanced                                            *ole.IDispatch
@@ -100,6 +101,9 @@ func (v *viewer) renderStatus() {
 		}
 		user32.NewProc("SetWindowTextW").Call(v.header, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(status))))
 		user32.NewProc("InvalidateRect").Call(v.header, 0, 0)
+	}
+	if v.hideConnectedNotice && v.canHideConnectedNotice() {
+		v.dismissHeader()
 	}
 }
 
@@ -636,7 +640,7 @@ func (v *viewer) resize() {
 		v.layout = settings
 	}
 	if connected && !v.display.connected {
-		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
+		v.setStatus(connectedNotice)
 	}
 	if !v.enhanced {
 		v.display.connected = connected
@@ -661,7 +665,7 @@ func (v *viewer) resize() {
 		v.setStatus("已连接 · 客户机显示尚未就绪，稍后自动调整分辨率")
 	} else if sent || v.display.applied == settings {
 		v.displayError = ""
-		v.setStatus("已连接 · 关闭控制台后虚拟机继续运行")
+		v.setStatus(connectedNotice)
 	}
 }
 func (v *viewer) close() {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -41,6 +42,60 @@ func TestDismissHeaderReclaimsSpaceAndStaysHidden(t *testing.T) {
 				t.Fatal("repeated dismissal invalidated the layout again")
 			}
 		})
+	}
+}
+
+func TestConnectedNoticeOptOutPersistsAndPreservesOtherMessages(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	v := &viewer{log: io.Discard, toolbar: &consoleToolbar{confirmButton: 501}}
+	v.loadNoticePreference()
+	v.setStatus(connectedNotice)
+	if v.headerHidden || !v.canHideConnectedNotice() {
+		t.Fatal("connected notice must initially offer opt-out")
+	}
+	if v.toolbarCommand(toolbarConfirm, 0) || v.toolbarCommand(toolbarConfirm, 502) {
+		t.Fatal("opt-out accepted a command from an unrelated control")
+	}
+	if !v.toolbarCommand(toolbarConfirm, 501) || !v.headerHidden || !v.hideConnectedNotice {
+		t.Fatal("opt-out did not immediately dismiss and remember the notice")
+	}
+	next := &viewer{log: io.Discard, automatic: true, toolbar: &consoleToolbar{}}
+	next.loadNoticePreference()
+	next.setStatus(connectedNotice)
+	if !next.hideConnectedNotice || !next.headerHidden {
+		t.Fatal("another console window did not honor the saved preference")
+	}
+	next.applyEnhancedAvailability("available")
+	if !next.headerHidden {
+		t.Fatal("a guest status refresh restored the suppressed connected notice")
+	}
+	next.toolbarError(errors.New("连接失败"))
+	if next.headerHidden || next.canHideConnectedNotice() {
+		t.Fatal("the preference hid an error")
+	}
+	next.showPrompt(promptShutdown)
+	if next.headerHidden || next.canHideConnectedNotice() || next.toolbar.prompt != promptShutdown {
+		t.Fatal("the preference hid a confirmation")
+	}
+	next.clearPrompt()
+	next.toolbar.notice = "虚拟机已暂停"
+	next.setStatus(connectedNotice)
+	if next.headerHidden || next.canHideConnectedNotice() {
+		t.Fatal("the preference hid an operation result")
+	}
+}
+
+func TestConnectedNoticePreferenceFailuresStayVisible(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	if err := os.WriteFile(filepath.Join(dir, "my-vm"), []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	v := &viewer{log: io.Discard, toolbar: &consoleToolbar{confirmButton: 501}}
+	v.setStatus(connectedNotice)
+	v.toolbarCommand(toolbarConfirm, 501)
+	if v.hideConnectedNotice || v.headerHidden || !v.statusError {
+		t.Fatal("failed save silently dismissed the notice", v.status)
 	}
 }
 
