@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"my-vm/internal/sharing"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,37 @@ import (
 	"testing"
 	"time"
 )
+
+func TestGuestStatusBindsCurrentSessionWithoutShares(t *testing.T) {
+	for _, osName := range []string{"windows10", "ubuntu26"} {
+		manager := NewManager(t.TempDir(), io.Discard)
+		machine := NewMachine()
+		machine.GuestOS = osName
+		feed := sharing.NewStatusFeed()
+		manager.sessions[machine.ID] = &session{machine: machine, runtimeID: "runtime-a", shares: &sharing.Service{Status: feed}}
+		if got, err := manager.GuestStatus(machine.ID, "{RUNTIME-A}"); err != nil || got != feed {
+			t.Fatal(got, err)
+		}
+		if _, err := manager.GuestStatus(machine.ID, "runtime-b"); err == nil {
+			t.Fatal("wrong runtime accepted")
+		}
+		if _, err := manager.GuestStatus("other", "runtime-a"); err == nil {
+			t.Fatal("wrong machine accepted")
+		}
+		feed.Close()
+		newFeed := sharing.NewStatusFeed()
+		manager.sessions[machine.ID] = &session{machine: machine, runtimeID: "runtime-a", shares: &sharing.Service{Status: newFeed}}
+		got, err := manager.GuestStatus(machine.ID, "runtime-a")
+		if err != nil || got == feed || got != newFeed {
+			t.Fatal("restarted VM inherited old status", err)
+		}
+		newFeed.Close()
+		delete(manager.sessions, machine.ID)
+		if _, err = manager.GuestStatus(machine.ID, "runtime-a"); err == nil {
+			t.Fatal("stopped VM accepted")
+		}
+	}
+}
 
 func TestLegacyLibraryPreservesDisks(t *testing.T) {
 	m := NewMachine()

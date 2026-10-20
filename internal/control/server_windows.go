@@ -53,6 +53,11 @@ func Listen(manager *vm.Manager, allow func(string, string) error, changed func(
 	return s, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Subscriptions are read-only and must not keep the manager's operation guard busy.
+	if r.URL.Path == "/v1/guest-status" {
+		s.guestStatus(w, r)
+		return
+	}
 	s.active.Add(1)
 	defer s.active.Add(-1)
 	if r.URL.Path != "/v1/action" && !strings.HasPrefix(r.URL.Path, "/v1/guest/") {
@@ -135,6 +140,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+func (s *Server) guestStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	feed, err := s.manager.GuestStatus(r.URL.Query().Get("vm"), r.URL.Query().Get("runtime"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	controller := http.NewResponseController(w)
+	_ = feed.Stream(r.Context(), func(event guestops.StatusEvent) error {
+		_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := json.NewEncoder(w).Encode(event); err != nil {
+			return err
+		}
+		return controller.Flush()
+	})
+}
+
 func selectMachine(machines []vm.Machine, selector string) (vm.Machine, error) {
 	for _, machine := range machines {
 		if machine.ID == selector {

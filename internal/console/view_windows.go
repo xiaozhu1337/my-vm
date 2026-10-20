@@ -94,7 +94,11 @@ func (v *viewer) setStatus(status string) {
 
 func (v *viewer) renderStatus() {
 	if v.header != 0 {
-		user32.NewProc("SetWindowTextW").Call(v.header, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(v.status))))
+		status := v.status
+		if v.toolbar != nil && v.toolbar.guestNotice != "" && strings.HasPrefix(status, "已连接") {
+			status += " · " + v.toolbar.guestNotice
+		}
+		user32.NewProc("SetWindowTextW").Call(v.header, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(status))))
 		user32.NewProc("InvalidateRect").Call(v.header, 0, 0)
 	}
 }
@@ -141,6 +145,11 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 	case 0x8002:
 		if v != nil && v.acceptFallback(wparam) {
 			v.fallbackBasic()
+		}
+		return 0
+	case 0x8006:
+		if v != nil {
+			v.guestStatusResult()
 		}
 		return 0
 	case 0x8004:
@@ -430,6 +439,7 @@ func Run(args []string, log io.Writer) error {
 			v.addLoginMenu()
 		}
 		v.startRenderHost()
+		v.startGuestStatus()
 	} else {
 		// A visible, tiny renderer owns authentication UI without covering the working basic view.
 		user32.NewProc("ShowWindow").Call(v.hwnd, 4)
@@ -665,6 +675,9 @@ func (v *viewer) close() {
 		v.foregroundHook = 0
 	}
 	if v.host != nil {
+		if v.toolbar != nil {
+			v.toolbar.cancel()
+		}
 		v.host.Close()
 		return
 	}

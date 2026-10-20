@@ -15,6 +15,7 @@ func services(ctx context.Context, cancel context.CancelFunc, log io.Writer, map
 	results := make(chan error, 1)
 	var workers sync.WaitGroup
 	workers.Go(func() { desktop(ctx, log) })
+	workers.Go(func() { runStatusPublisher(ctx, log, status) })
 	workers.Go(func() { guestops.RunStatus(ctx, log, func(err error) { startup <- err }, status) })
 	workers.Go(func() {
 		results <- sharing.RunProxyReady(ctx, log, mapShares, func(err error) { startup <- err }, func(err error) {

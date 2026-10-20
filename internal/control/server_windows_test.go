@@ -12,6 +12,21 @@ import (
 	"my-vm/internal/vm"
 )
 
+func TestGuestStatusSubscriptionDoesNotEnterOperationGuard(t *testing.T) {
+	server := &Server{manager: vm.NewManager(t.TempDir(), io.Discard), Allow: func(string, string) error { t.Fatal("status used operation guard"); return nil }, Changed: func(string) { t.Fatal("status caused configuration change") }}
+	for _, method := range []string{"GET", "POST"} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(method, "/v1/guest-status?vm=missing&runtime=old", nil))
+		want := 409
+		if method == "POST" {
+			want = 405
+		}
+		if response.Code != want || server.Active() {
+			t.Fatal(response.Code, server.Active())
+		}
+	}
+}
+
 func TestSelectionPaginationAndReadOnlyState(t *testing.T) {
 	root := t.TempDir()
 	first, second := vm.NewMachine(), vm.NewMachine()

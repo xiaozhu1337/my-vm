@@ -60,6 +60,7 @@ type consoleToolbar struct {
 	availability                enhancedAvailability
 	busy, fullscreen            bool
 	notice                      string
+	guestNotice                 string
 	bounds                      [4]int32
 	style                       uintptr
 }

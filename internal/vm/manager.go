@@ -58,6 +58,17 @@ func (m *Manager) State(id string) string {
 	return "已关机"
 }
 func (m *Manager) Active() bool { m.mu.Lock(); defer m.mu.Unlock(); return len(m.sessions) > 0 }
+
+// GuestStatus binds a subscription to the current session, never a later VM restart.
+func (m *Manager) GuestStatus(id, runtimeID string) (*sharing.StatusFeed, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.sessions[id]
+	if s == nil || runtimeID == "" || !strings.EqualFold(s.runtimeID, strings.Trim(runtimeID, "{}")) || s.shares == nil {
+		return nil, errors.New("客户机状态通道未运行或会话已更换")
+	}
+	return s.shares.Status, nil
+}
 func requireHCS(machine Machine) error {
 	if err := machine.Validate(); err != nil {
 		return err
@@ -175,21 +186,20 @@ func (m *Manager) Start(_ string, machine Machine) error {
 		fmt.Fprintln(m.Log, "HCS RuntimeId:", runtimeID)
 	}
 	s := &session{system: system, endpoints: endpoints, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine}
-	if len(machine.Shares) > 0 || machine.IsLinux() {
-		var saveLogin func(*rdpauth.Login) error
-		if machine.IsLinux() {
-			saveLogin = func(login *rdpauth.Login) error {
-				err := rdpauth.Save(`\\.\pipe\my-vm-`+machine.ID+".enhanced", login)
-				if err != nil && m.Log != nil {
-					fmt.Fprintln(m.Log, "保存增强登录凭据失败:", err)
-				}
-				return err
+	var saveLogin func(*rdpauth.Login) error
+	if machine.IsLinux() {
+		saveLogin = func(login *rdpauth.Login) error {
+			err := rdpauth.Save(`\\.\pipe\my-vm-`+machine.ID+".enhanced", login)
+			if err != nil && m.Log != nil {
+				fmt.Fprintln(m.Log, "保存增强登录凭据失败:", err)
 			}
+			return err
 		}
-		s.shares, err = sharing.Start(s.runtimeID, machine.Shares, m.Log, saveLogin)
-		if err != nil {
-			return fmt.Errorf("启动共享文件夹失败: %w", err)
-		}
+	}
+	// Status reporting also needs this VM-bound listener when no folders are shared.
+	s.shares, err = sharing.Start(s.runtimeID, machine.Shares, m.Log, saveLogin)
+	if err != nil {
+		return fmt.Errorf("启动客户机回传通道失败: %w", err)
 	}
 	m.mu.Lock()
 	m.sessions[machine.ID] = s

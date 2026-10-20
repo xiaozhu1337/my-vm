@@ -3,10 +3,17 @@
 package console
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"my-vm/internal/console/renderhost"
+	"my-vm/internal/control"
 	"my-vm/internal/guestops"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,7 +24,15 @@ import (
 	"my-vm/internal/hcs"
 )
 
+type guestStatusUpdate struct {
+	status   *guestops.Status
+	received time.Time
+}
+
 type enhancedAvailability struct {
+	updates            chan guestStatusUpdate
+	pushed             *guestops.Status
+	received           time.Time
 	results            chan string
 	last               string
 	next               time.Time
@@ -132,6 +147,11 @@ func queryEnhancedAvailability(runtimeID, kind string) string {
 }
 
 func (v *viewer) checkEnhancedAvailability() {
+	v.guestStatusResult()
+	if v.toolbar != nil && v.toolbar.availability.fresh(time.Now()) {
+		v.applyEnhancedAvailability(protocolAvailability(*v.toolbar.availability.pushed, v.desktopKind()))
+		return
+	}
 	if v.closed || !v.automatic || v.enhanced || v.host == nil || v.host.Candidate != nil || v.toolbar == nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
 		return
 	}
@@ -165,21 +185,150 @@ func (v *viewer) enhancedAvailabilityResult() {
 	availability := &v.toolbar.availability
 	select {
 	case state := <-availability.results:
-		if state != availability.last {
-			availability.last = state
-			if v.log != nil {
-				fmt.Fprintln(v.log, "增强状态:", state)
-			}
+		availability.checking = false
+		if availability.fresh(time.Now()) {
+			state = protocolAvailability(*availability.pushed, v.desktopKind())
 		}
-		if !v.automatic || v.enhanced || v.host == nil || v.host.Candidate != nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
-			availability.checking = false
-			return
-		}
-		if !availability.finish(renderhost.ShouldUpgrade(v.automatic, state)) {
-			return
-		}
+		v.applyEnhancedAvailability(state)
 	default:
 		return
 	}
-	v.switchRenderer(true, true)
+}
+
+func (a *enhancedAvailability) fresh(now time.Time) bool {
+	return a.pushed != nil && now.Sub(a.received) < 15*time.Second
+}
+
+func (v *viewer) desktopKind() string {
+	if !v.linux {
+		return "windows"
+	}
+	if v.linuxMode != "" {
+		return v.linuxMode
+	}
+	return "linux"
+}
+
+func (v *viewer) applyEnhancedAvailability(state string) {
+	if v.closed || v.toolbar == nil {
+		return
+	}
+	a := &v.toolbar.availability
+	if a.last != state {
+		a.last = state
+		if v.log != nil {
+			fmt.Fprintln(v.log, "增强状态:", state)
+		}
+		switch state {
+		case "ready":
+			v.toolbar.guestNotice = "增强画面已就绪"
+		case "available":
+			v.toolbar.guestNotice = "增强服务可用，可点击“增强”尝试连接"
+		case "waiting":
+			v.toolbar.guestNotice = "增强画面尚未就绪，请确认客户机桌面已登录、解锁"
+		case "unsupported":
+			v.toolbar.guestNotice = "当前客户机状态不支持增强画面"
+		default:
+			v.toolbar.guestNotice = "客户机状态暂不可用，正在重新检测"
+		}
+		if v.automatic && (state == "ready" || state == "available") {
+			v.revealHeader()
+		}
+		v.renderStatus()
+	}
+	if !v.automatic || v.enhanced || v.host == nil || v.host.Candidate != nil || v.toolbar.busy || v.toolbar.prompt != promptNone {
+		return
+	}
+	if a.finish(renderhost.ShouldUpgrade(v.automatic, state)) {
+		v.switchRenderer(true, true)
+	}
+}
+
+func (v *viewer) startGuestStatus() {
+	if v.toolbar == nil || v.machineID == "" || v.vmid == "" {
+		return
+	}
+	updates := make(chan guestStatusUpdate, 1)
+	v.toolbar.availability.updates = updates
+	ctx, id, runtimeID, hwnd := v.toolbar.ctx, v.machineID, v.vmid, v.hwnd
+	go func() {
+		client, err := control.ExistingClient()
+		if err != nil {
+			return
+		}
+		defer client.CloseIdleConnections()
+		client.Transport.(*http.Transport).ResponseHeaderTimeout = 5 * time.Second
+		watchGuestStatus(ctx, client, id, runtimeID, func(status *guestops.Status) {
+			update := guestStatusUpdate{status: status, received: time.Now()}
+			select {
+			case <-updates:
+			default:
+			}
+			select {
+			case updates <- update:
+			case <-ctx.Done():
+				return
+			}
+			user32.NewProc("PostMessageW").Call(hwnd, 0x8006, 0, 0)
+		})
+	}()
+}
+
+func watchGuestStatus(ctx context.Context, client *http.Client, id, runtimeID string, update func(*guestops.Status)) {
+	address := "http://manager/v1/guest-status?" + url.Values{"vm": {id}, "runtime": {runtimeID}}.Encode()
+	for ctx.Err() == nil {
+		r, _ := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+		response, err := client.Do(r)
+		if err == nil {
+			if response.StatusCode == http.StatusOK {
+				_ = readGuestStatus(response.Body, update)
+			}
+			response.Body.Close()
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		update(nil)
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func readGuestStatus(reader io.Reader, update func(*guestops.Status)) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 4096), 4096)
+	for scanner.Scan() {
+		var event guestops.StatusEvent
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || event.Status != nil && event.Status.Validate() != nil {
+			return errors.New("invalid guest status stream")
+		}
+		update(event.Status)
+	}
+	return scanner.Err()
+}
+
+func (v *viewer) guestStatusResult() {
+	if v.closed || v.toolbar == nil {
+		return
+	}
+	a := &v.toolbar.availability
+	select {
+	case update := <-a.updates:
+		a.pushed, a.received = update.status, update.received
+		if a.fresh(time.Now()) {
+			v.applyEnhancedAvailability(protocolAvailability(*a.pushed, v.desktopKind()))
+			return
+		}
+	default:
+		if a.pushed == nil || a.fresh(time.Now()) {
+			return
+		}
+		a.pushed = nil
+	}
+	v.applyEnhancedAvailability("unknown")
 }

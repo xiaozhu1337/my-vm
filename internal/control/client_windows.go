@@ -106,6 +106,15 @@ func Client(ctx context.Context) (*http.Client, error) {
 		return nil, fmt.Errorf("无法连接管理器，请以相同用户和管理员权限运行: %w", err)
 	}
 	probe.Close()
+	return ExistingClient()
+}
+
+// ExistingClient never starts a GUI; background console subscriptions reconnect independently.
+func ExistingClient() (*http.Client, error) {
+	name, _, err := pipeName()
+	if err != nil {
+		return nil, err
+	}
 	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return dialManager(ctx, name)
 	}}

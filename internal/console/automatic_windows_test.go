@@ -4,6 +4,7 @@ package console
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"my-vm/internal/guestops"
@@ -19,6 +20,76 @@ import (
 
 	ole "github.com/go-ole/go-ole"
 )
+
+func TestGuestStatusStreamValidationAndFreshness(t *testing.T) {
+	for _, test := range []struct {
+		body string
+		want int
+		fail bool
+	}{
+		{`{"status":null}` + "\n", 1, false},
+		{`{"status":{"protocol":1,"os":"windows","desktop":{"mode":"windows","state":"available","reason":"service_trigger_start"}}}` + "\n", 1, false},
+		{`{"status":{"protocol":2}}` + "\n", 0, true},
+		{strings.Repeat("a", 4097) + "\n", 0, true},
+	} {
+		count := 0
+		err := readGuestStatus(strings.NewReader(test.body), func(*guestops.Status) { count++ })
+		if (err != nil) != test.fail || count != test.want {
+			t.Fatalf("stream count=%d error=%v", count, err)
+		}
+	}
+	status := guestops.Status{Protocol: 1, OS: "windows", Desktop: guestops.DesktopStatus{Mode: "windows", State: "waiting"}}
+	a := enhancedAvailability{pushed: &status, received: time.Now()}
+	if !a.fresh(time.Now()) || a.fresh(time.Now().Add(16*time.Second)) {
+		t.Fatal("push freshness incorrect")
+	}
+	bar := &consoleToolbar{availability: a}
+	bar.availability.results = make(chan string, 1)
+	bar.availability.results <- "ready"
+	v := &viewer{toolbar: bar, log: io.Discard}
+	v.enhancedAvailabilityResult()
+	if bar.availability.last != "waiting" {
+		t.Fatal("late poll overrode current pushed state")
+	}
+}
+
+func TestPushedAvailableShowsNoticeWithoutSwitchingManualBasic(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		status := guestops.Status{Protocol: 1, OS: "windows", Desktop: guestops.DesktopStatus{Mode: "windows", State: "available"}}
+		bar := &consoleToolbar{availability: enhancedAvailability{updates: make(chan guestStatusUpdate, 1)}}
+		bar.availability.updates <- guestStatusUpdate{status: &status, received: time.Now()}
+		v := &viewer{toolbar: bar, automatic: automatic, headerHidden: true, log: io.Discard}
+		v.guestStatusResult()
+		if bar.availability.last != "available" || !strings.Contains(bar.guestNotice, "可点击") || v.enhanced || bar.availability.notified || v.headerHidden == automatic {
+			t.Fatal("pushed available did not preserve manual mode or expose its notice", automatic)
+		}
+	}
+}
+
+func TestGuestStatusWatcherClearsOnDisconnectAndCancels(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var calls atomic.Int32
+	client := &http.Client{Transport: desktopTransport(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		if r.URL.Path != "/v1/guest-status" || r.URL.Query().Get("vm") != "vm" || r.URL.Query().Get("runtime") != "runtime" {
+			t.Error("wrong status selector")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":{"protocol":1,"os":"windows","desktop":{"mode":"windows","state":"ready"}}}` + "\n"))}, nil
+	})}
+	states := []string{}
+	watchGuestStatus(ctx, client, "vm", "runtime", func(status *guestops.Status) {
+		if status == nil {
+			states = append(states, "offline")
+			cancel()
+		} else {
+			states = append(states, status.Desktop.State)
+		}
+	})
+	if strings.Join(states, ",") != "ready,offline" || calls.Load() != 1 {
+		t.Fatal(states, calls.Load())
+	}
+}
 
 func TestProtocolAvailabilityRespectsModeAndState(t *testing.T) {
 	for _, test := range []struct{ os, mode, state, kind, want string }{{"linux", "wayland", "unknown", "linux", "unknown"}, {"linux", "wayland", "ready", "windows", "unsupported"}, {"windows", "windows", "ready", "windows", "ready"}, {"windows", "windows", "available", "windows", "available"}, {"linux", "wayland", "waiting", "linux", "waiting"}, {"linux", "wayland", "ready", "x11", "unsupported"}, {"windows", "windows", "ready", "linux", "unsupported"}, {"linux", "x11", "unsupported", "linux", "unsupported"}, {"linux", "x11", "ready", "linux", "unsupported"}, {"linux", "x11", "ready", "x11", "unsupported"}} {
