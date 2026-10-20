@@ -11,8 +11,8 @@ A native Windows virtual machine manager for Windows and Linux guests, built on 
 - **Native Hyper-V performance.** Uses the Windows virtualization stack directly, with hardware-backed CPU, memory, storage, and networking. No QEMU runtime is required.
 - **Live snapshots with branches.** Create VHDX differencing snapshots while your guest keeps running. Progress appears in the background. Restore an earlier point and create a new branch without copying the entire system disk.
 - **Linux enhanced sessions.** Connect to the existing GNOME or KDE Plasma Wayland desktop. GNOME supports dynamic resolution; KDE uses display fitting. No replacement desktop or Xfce installation is required.
-- **Windows and Linux in one library.** Manage virtual hardware, NAT or bridged networking, installation media, clones, and basic or enhanced consoles from the same interface.
-- **Private folder sharing.** Share selected folders through a VM-specific Hyper-V Socket channel. Folders default to read-only; the host does not expose a TCP file-sharing port.
+- **Shared clipboard.** Copy and paste between the host and guest in enhanced sessions. Enable clipboard sharing per VM; supported formats depend on the guest's desktop service.
+- **Private folder sharing.** Make selected host folders available inside the guest without copying files back and forth. Configure access per VM, with read-only access by default and optional write access, over a private Hyper-V Socket channel without exposing a TCP file-sharing port.
 - **Useful automation.** A separate CLI controls VMs and snapshots, executes guest commands, and transfers individual files in either direction.
 - **Responsive management.** Console rendering runs in separate processes. Background jobs reserve the affected VM while other VMs remain manageable.
 - **Small guest-tools discs.** Separate Windows and Linux discs install desktop integration and folder-sharing tools. Linux setup downloads only the required dependencies from the guest's configured APT repositories for Ubuntu/Kubuntu 26.04 and 26.10 amd64.
@@ -132,6 +132,13 @@ mise exec go@1.27.2 -- go vet ./...
 Configuration lives in `%APPDATA%\my-vm` as YAML. Errors are written asynchronously to `logs\my-vm.log` beside the executable. Removing a VM from the library keeps its disks and snapshots.
 
 This project currently targets **Windows x64 hosts**. It does not provide memory snapshots, unattended OS installation, automatic qcow2 conversion, or universal GPU compatibility. An abnormal manager process exit terminates its HCS VMs; shut guests down normally before closing the host session.
+
+## Todo
+
+- [ ] Support Linux hosts.
+- [ ] Support macOS hosts.
+
+These are planned host platforms; the current release supports Windows x64 hosts.
 
 ## Acknowledgments
 
