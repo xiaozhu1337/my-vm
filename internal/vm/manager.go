@@ -27,6 +27,7 @@ type session struct {
 	paused           bool
 	runtimeID        string
 	machine          Machine
+	disk             string
 }
 
 type Manager struct {
@@ -82,14 +83,29 @@ func (m *Manager) Start(_ string, machine Machine) error {
 	lock := m.operation(machine.ID)
 	lock.Lock()
 	defer lock.Unlock()
+	return m.start(machine)
+}
+
+// start runs while the caller owns this machine's operation lock.
+func (m *Manager) start(machine Machine) error {
 	if err := requireHCS(machine); err != nil {
 		return err
 	}
 	if m.State(machine.ID) != "已关机" {
 		return errors.New("虚拟机已经启动")
 	}
-	disk := DiskPath(m.Root, machine)
+	storage, err := m.storage(machine)
+	if err != nil {
+		return err
+	}
+	if err = storage.CheckFiles(storage.Chain()...); err != nil {
+		return err
+	}
+	disk := storage.Path(storage.Active)
 	files := []string{disk, machine.ISO, machine.DriverISO}
+	for _, parent := range storage.Chain()[1:] {
+		files = append(files, storage.Path(parent))
+	}
 	for _, path := range files {
 		if path == "" {
 			continue
@@ -113,7 +129,7 @@ func (m *Manager) Start(_ string, machine Machine) error {
 			}
 		}
 	}
-	folder := filepath.Dir(disk)
+	folder := filepath.Dir(DiskPath(m.Root, machine))
 	for _, file := range []struct{ name, create string }{{"guest.vmgs", "HcsCreateEmptyGuestStateFile"}, {"runtime.vmrs", "HcsCreateEmptyRuntimeStateFile"}} {
 		path := filepath.Join(folder, file.name)
 		create := ""
@@ -185,7 +201,7 @@ func (m *Manager) Start(_ string, machine Machine) error {
 	if m.Log != nil {
 		fmt.Fprintln(m.Log, "HCS RuntimeId:", runtimeID)
 	}
-	s := &session{system: system, endpoints: endpoints, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine}
+	s := &session{system: system, endpoints: endpoints, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine, disk: storage.Active}
 	var saveLogin func(*rdpauth.Login) error
 	if machine.IsLinux() {
 		saveLogin = func(login *rdpauth.Login) error {
@@ -345,6 +361,12 @@ func (m *Manager) CreateDisk(_ string, machine Machine) error {
 		return err
 	}
 	path := DiskPath(m.Root, machine)
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "storage.yaml")); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return err
+		}
+		return errors.New("虚拟机已有磁盘链，不能重新创建基础盘")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}

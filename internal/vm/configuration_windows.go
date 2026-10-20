@@ -5,6 +5,7 @@ package vm
 import (
 	"fmt"
 	"golang.org/x/sys/windows"
+	"my-vm/internal/checkpoint"
 	"my-vm/internal/sharing"
 	"path/filepath"
 	"strconv"
@@ -52,7 +53,14 @@ func configurationWithEndpoints(root string, m Machine, endpoints []string, sid 
 	connection := func(name string) map[string]any {
 		return map[string]any{"NamedPipe": pipe + name, "AccessSids": []string{sid}}
 	}
-	attachments := map[string]any{"0": map[string]any{"Type": "VirtualDisk", "Path": DiskPath(root, m)}}
+	storage, err := checkpoint.Load(filepath.Dir(DiskPath(root, m)))
+	if err != nil {
+		return nil, err
+	}
+	if storage.Pending != nil {
+		return nil, fmt.Errorf("磁盘分叉尚未完成，不能生成启动配置")
+	}
+	attachments := map[string]any{"0": map[string]any{"Type": "VirtualDisk", "Path": storage.Path(storage.Active)}}
 	if m.ISO != "" {
 		attachments["1"] = map[string]any{"Type": "Iso", "Path": m.ISO}
 	}

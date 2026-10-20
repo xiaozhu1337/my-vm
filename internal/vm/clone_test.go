@@ -129,13 +129,10 @@ func TestClonePreservesSourceAndCopiesPersistentState(t *testing.T) {
 	}
 }
 
-func TestSnapshotCopyDoesNotBlockOtherMachines(t *testing.T) {
+func TestSnapshotWorkDoesNotBlockOtherMachines(t *testing.T) {
 	manager := NewManager(t.TempDir(), io.Discard)
 	machine, other := NewMachine(), NewMachine()
-	if err := os.MkdirAll(filepath.Dir(DiskPath(manager.Root, machine)), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(DiskPath(manager.Root, machine), bytes.Repeat([]byte{42}, 1<<20), 0600); err != nil {
+	if err := manager.CreateDisk("", machine); err != nil {
 		t.Fatal(err)
 	}
 	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan error, 1)

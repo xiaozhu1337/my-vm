@@ -134,7 +134,7 @@ func (a *application) settings(c *ui.Context) {
 		case 3:
 			card(c, "数据存储", "VHDX 磁盘按实际使用占用空间。", func() {
 				infoRow(c, "数据目录", a.root)
-				muted(c, "旧 qcow2 文件保留原位，不自动转换或覆盖。离线快照复制整个磁盘文件，请预留足够空间。")
+				muted(c, "旧 qcow2 文件保留原位，不自动转换或覆盖。差分快照按后续写入增长；删除节点时，仍被其他分支引用的磁盘会保留。")
 			})
 		}
 	})

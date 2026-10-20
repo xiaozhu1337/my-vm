@@ -16,6 +16,9 @@ func TestDiskJobAllowsNavigationAndBlocksSourceActions(t *testing.T) {
 	source := a.config.Machines[0]
 	job := &diskJob{machineID: source.ID, name: source.Name, label: "创建快照", copied: 1, total: 2}
 	a.diskJobs = map[string]*diskJob{source.ID: job}
+	if status := job.status(); !strings.Contains(status, "50.0%") || strings.Contains(status, "GiB") {
+		t.Fatal("snapshot phase was rendered as copied bytes", status)
+	}
 	tt := testView(a, 1080, 720)
 	blockedMachineAction(t, tt, source.Name, "启动虚拟机")
 	blockedMachineAction(t, tt, source.Name, "编辑配置")

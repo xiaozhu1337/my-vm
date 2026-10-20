@@ -253,7 +253,7 @@ func (a *application) snapshot(m vm.Machine, action, name string) {
 		return
 	}
 	label := map[string]string{"-c": "创建快照", "-a": "恢复快照", "-d": "删除快照"}[action]
-	if action != "-c" && !a.confirm(label, label+"「"+name+"」？", "虚拟机："+m.Name+"\n"+map[string]string{"-a": "恢复会覆盖当前磁盘内容，请先为当前状态创建快照。", "-d": "删除后无法再恢复到此快照。"}[action]) {
+	if action != "-c" && !a.confirm(label, label+"「"+name+"」？", "虚拟机："+m.Name+"\n"+map[string]string{"-a": "恢复会放弃当前未保存的磁盘内容。运行中的客户机会重启，内存、程序和未保存的操作不会恢复；请先为当前磁盘创建快照。", "-d": "删除后无法再恢复到此节点；其他分支和当前虚拟机保留。仍被引用的父盘会继续保留。"}[action]) {
 		return
 	}
 	request := a.snapshotRequest

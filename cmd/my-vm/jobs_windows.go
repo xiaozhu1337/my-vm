@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -86,6 +87,12 @@ func (a *application) runDisk(label string, machine vm.Machine, targetID string,
 func (j *diskJob) status() string {
 	if j.total <= 0 {
 		return j.label + "「" + j.name + "」…"
+	}
+	if strings.Contains(j.label, "快照") {
+		if j.copied >= j.total {
+			return j.label + "「" + j.name + "」· 100% · 正在保存…"
+		}
+		return fmt.Sprintf("%s「%s」· %.1f%%", j.label, j.name, float64(j.copied)*100/float64(j.total))
 	}
 	if j.copied >= j.total {
 		return j.label + "「" + j.name + "」· 复制完成，正在保存…"

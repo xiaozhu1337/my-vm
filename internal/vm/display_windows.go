@@ -52,6 +52,11 @@ func (m *Manager) showDisplay(id string, enhanced, automatic bool) error {
 	lock := m.operation(id)
 	lock.Lock()
 	defer lock.Unlock()
+	return m.showDisplayLocked(id, enhanced, automatic)
+}
+
+func (m *Manager) showDisplayLocked(id string, enhanced, automatic bool) error {
+	lock := m.operation(id)
 	m.mu.Lock()
 	s := m.sessions[id]
 	m.mu.Unlock()

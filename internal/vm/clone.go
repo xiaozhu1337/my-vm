@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -60,6 +61,13 @@ func (m *Manager) Clone(source, target Machine, progress func(int64, int64)) (er
 	if m.State(source.ID) != "已关机" || m.State(target.ID) != "已关机" {
 		return errors.New("请先关闭虚拟机，再复制磁盘")
 	}
+	storage, err := m.storage(source)
+	if err != nil {
+		return err
+	}
+	if err = storage.CheckFiles(storage.Chain()...); err != nil {
+		return err
+	}
 	folder := filepath.Dir(DiskPath(m.Root, target))
 	if err = os.MkdirAll(filepath.Dir(folder), 0700); err != nil {
 		return err
@@ -77,7 +85,12 @@ func (m *Manager) Clone(source, target Machine, progress func(int64, int64)) (er
 			}
 		}
 	}()
-	if err = copyExclusive(DiskPath(m.Root, source), DiskPath(m.Root, target), progress); err != nil {
+	if len(storage.Chain()) > 1 {
+		err = hcs.ExportDisk(context.Background(), DiskPath(m.Root, target), storage.Path(storage.Active), progress)
+	} else {
+		err = copyExclusive(storage.Path(storage.Active), DiskPath(m.Root, target), progress)
+	}
+	if err != nil {
 		return err
 	}
 	guestState := filepath.Join(filepath.Dir(DiskPath(m.Root, source)), "guest.vmgs")

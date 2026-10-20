@@ -42,7 +42,7 @@ func (a *application) details(c *ui.Context) {
 		stateBadge(c, state)
 	})
 	tabs := components.Tabs(c, &a.detailTab, components.TabsUnderline, "概览", "磁盘快照")
-	if tabs.List.Changed() && a.detailTab == 1 && state == "已关机" && !a.diskBusy(m.ID) {
+	if tabs.List.Changed() && a.detailTab == 1 && !a.diskBusy(m.ID) {
 		a.refreshSnapshots(m)
 	}
 	scrollBody(c, fmt.Sprintf("machine-%s-%d", m.ID, a.detailTab), func() {
@@ -144,7 +144,7 @@ func (a *application) machineMenu(menu *ui.Menu, m vm.Machine, state string) {
 		a.installEnhancements(m)
 	}
 	if menu.Item("管理快照").Disabled(a.busy || a.loadError != nil || !hcs).Chosen() && a.selectMachine(m, "", 1) {
-		if off && !a.snapshotsLoaded && !a.diskBusy(m.ID) {
+		if !a.snapshotsLoaded && !a.diskBusy(m.ID) {
 			a.refreshSnapshots(m)
 		}
 	}

@@ -406,19 +406,28 @@ func TestViewSnapshots(t *testing.T) {
 	}
 }
 
-func TestViewRunningBlocksSnapshots(t *testing.T) {
+func TestViewRunningSnapshotControlsAndTree(t *testing.T) {
 	a := testApplication(t, 1)
 	a.snapshotName = "before-update"
-	a.snapshots = []vm.Snapshot{{ID: "1", Name: "baseline", DateSeconds: 1700000000}}
+	a.snapshots = []vm.Snapshot{{ID: "1", Name: "baseline", DateSeconds: 1700000000}, {ID: "2", Name: "branch", ParentID: "1", ParentName: "baseline", Depth: 1, Current: true, DateSeconds: 1700000001}}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(appTheme(c))
 		a.snapshotView(c, a.config.Machines[0], false)
-	}, 700, 700)
+	}, 700, 900)
+	for _, label := range []string{"支持运行中创建和删除差分快照", "+-- branch", "父快照：baseline", "当前分支"} {
+		if !tt.HasText(label) {
+			t.Fatal("running snapshot tree missing", label, tt.Texts())
+		}
+	}
+	click(t, tt, "创建快照")
+	if a.busy || a.diskJobs[a.selected] == nil {
+		t.Fatal("running snapshot control did not start a background job")
+	}
 	for _, label := range []string{"创建快照", "刷新列表", "恢复", "删除"} {
 		click(t, tt, label)
 	}
-	if a.busy || !tt.HasText("关闭虚拟机后可管理快照") {
-		t.Fatal("running guest accepted a snapshot operation")
+	if len(a.diskJobs) != 1 {
+		t.Fatal("busy snapshot controls accepted a conflicting job")
 	}
 }
 
