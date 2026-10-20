@@ -17,6 +17,7 @@ import (
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
+	"golang.org/x/sys/windows"
 )
 
 func TestDismissHeaderReclaimsSpaceAndStaysHidden(t *testing.T) {
@@ -360,6 +361,7 @@ func TestNativeInputModePolicy(t *testing.T) {
 	defer settings.Release()
 	label := ole.SysAllocString("AllowRelativeMouseMode")
 	defer ole.SysFreeString(label)
+	extendedMouse := windows.RtlGetVersion().BuildNumber >= 26100
 	for _, test := range []struct {
 		name              string
 		enhanced, wayland bool
@@ -368,22 +370,26 @@ func TestNativeInputModePolicy(t *testing.T) {
 		{"Windows basic", false, false},
 		{"Windows enhanced", true, false},
 	} {
-		// Reproduce the old unconditional opt-in before applying the input policy.
-		if err := extended(client, "AllowRelativeMouseMode", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
-			t.Fatal(test.name, err)
+		if extendedMouse {
+			// Reproduce the old unconditional opt-in before applying the input policy.
+			if err := extended(client, "AllowRelativeMouseMode", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
+				t.Fatal(test.name, err)
+			}
 		}
 		v := &viewer{client: client, advanced: advanced, enhanced: test.enhanced, wayland: test.wayland}
 		if err := v.configureInput(); err != nil {
 			t.Fatal(test.name, err)
 		}
-		value := ole.VARIANT{}
-		if err := call(settings, 4, uintptr(unsafe.Pointer(label)), uintptr(unsafe.Pointer(&value))); err != nil {
-			t.Fatal(test.name, err)
+		if extendedMouse {
+			value := ole.VARIANT{}
+			if err := call(settings, 4, uintptr(unsafe.Pointer(label)), uintptr(unsafe.Pointer(&value))); err != nil {
+				t.Fatal(test.name, err)
+			}
+			if value.VT != ole.VT_BOOL || (value.Val != 0) != !test.wayland {
+				t.Fatalf("%s: relative mouse opt-in=%+v, want %v", test.name, value, !test.wayland)
+			}
+			_ = value.Clear()
 		}
-		if value.VT != ole.VT_BOOL || (value.Val != 0) != !test.wayland {
-			t.Fatalf("%s: relative mouse opt-in=%+v, want %v", test.name, value, !test.wayland)
-		}
-		_ = value.Clear()
 		mode, err := oleutil.GetProperty(advanced, "RelativeMouseMode")
 		if err != nil {
 			t.Fatal(test.name, err)

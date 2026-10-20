@@ -4,8 +4,10 @@ package console
 
 import (
 	"fmt"
-	ole "github.com/go-ole/go-ole"
 	"unsafe"
+
+	ole "github.com/go-ole/go-ole"
+	"golang.org/x/sys/windows"
 )
 
 func (v *viewer) configureInput() error {
@@ -19,6 +21,10 @@ func (v *viewer) configureInput() error {
 	defer secured.Release()
 	if err := put(secured, "KeyboardHookMode", 1); err != nil {
 		return err
+	}
+	// The extended setting was introduced in Windows 11 24H2.
+	if v.wayland && windows.RtlGetVersion().BuildNumber < 26100 {
+		return nil
 	}
 	allow := ole.VARIANT{VT: ole.VT_BOOL, Val: -1}
 	if v.wayland {
