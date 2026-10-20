@@ -30,9 +30,13 @@ func TestDesktopStatusProtocolSessionAndLock(t *testing.T) {
 		}
 		desktopListening.Store(test.bridge)
 		status := desktopStatus(context.Background())
-		if status.Desktop.State != test.state || status.Desktop.Reason != test.reason || status.Validate() != nil {
+		if status.Desktop.State != test.state || status.Desktop.Reason != test.reason || status.Desktop.DynamicResolution != (test.session == "wayland") || status.Validate() != nil {
 			t.Fatalf("unexpected desktop status: %+v", status)
 		}
+	}
+	t.Setenv("XDG_CURRENT_DESKTOP", "KDE")
+	if status := desktopStatus(context.Background()); status.Desktop.DynamicResolution {
+		t.Fatal("KDE advertised unsupported dynamic resolution")
 	}
 	t.Setenv("XDG_SESSION_TYPE", "wayland")
 	t.Setenv("PATH", t.TempDir())

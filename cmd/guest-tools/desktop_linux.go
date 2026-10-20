@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"my-vm/internal/gnomedisplay"
 	"my-vm/internal/guestops"
 	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,10 +22,13 @@ import (
 )
 
 var desktopListening atomic.Bool
+var gnomeDesktop sync.Mutex
 
 func desktopStatus(ctx context.Context) guestops.Status {
 	status := guestops.Status{Protocol: guestops.ProtocolVersion, OS: "linux", Desktop: guestops.DesktopStatus{State: "unsupported", Reason: "session_unsupported"}}
 	status.Desktop.Mode = os.Getenv("XDG_SESSION_TYPE")
+	kind, _ := waylandDesktop(os.Getenv("XDG_CURRENT_DESKTOP"))
+	status.Desktop.DynamicResolution = status.Desktop.Mode == "wayland" && kind == "gnome"
 	if status.Desktop.Mode != "wayland" && status.Desktop.Mode != "x11" {
 		status.Desktop.Mode = ""
 		return status
@@ -117,7 +122,19 @@ func serveDesktop(ctx context.Context, log io.Writer) error {
 				defer incoming.Close()
 				address, err := desktopAddress(ctx)
 				if err == nil {
-					err = connectDesktop(ctx, incoming, address)
+					kind, _ := waylandDesktop(os.Getenv("XDG_CURRENT_DESKTOP"))
+					if kind == "gnome" {
+						if !gnomeDesktop.TryLock() {
+							err = errors.New("another GNOME enhanced session is active")
+						} else {
+							defer gnomeDesktop.Unlock()
+							err = gnomedisplay.WithRemoteMonitor(ctx, log, func(connection context.Context) error {
+								return connectDesktop(connection, incoming, address)
+							})
+						}
+					} else {
+						err = connectDesktop(ctx, incoming, address)
+					}
 				}
 				if err != nil && ctx.Err() == nil {
 					fmt.Fprintln(log, "Wayland RDP:", err)

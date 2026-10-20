@@ -25,9 +25,10 @@ import (
 )
 
 type displayCapability struct {
-	Mode     string `json:"mode"`
-	Username string `json:"username,omitempty"`
-	Password []byte `json:"password,omitempty"`
+	Mode              string `json:"mode"`
+	DynamicResolution bool   `json:"dynamic_resolution,omitempty"`
+	Username          string `json:"username,omitempty"`
+	Password          []byte `json:"password,omitempty"`
 }
 
 // All commands are fixed read-only queries, executed as the already logged-in desktop user.
@@ -71,7 +72,7 @@ func displayFromGuest(client *http.Client, kind string) (displayCapability, erro
 		if protocolAvailability(status, kind) != "ready" {
 			return displayCapability{}, errors.New("guest desktop is not ready")
 		}
-		return displayCapability{Mode: status.Desktop.Mode}, nil
+		return displayCapability{Mode: status.Desktop.Mode, DynamicResolution: status.Desktop.DynamicResolution}, nil
 	}
 	return legacyDisplayFromGuest(client, kind)
 }
@@ -139,6 +140,7 @@ func parseDisplay(data []byte) (displayCapability, error) {
 			result.Password = append(result.Password[:0], value...)
 		}
 	}
+	result.DynamicResolution = sawRDP
 	if !sawRDP {
 		return result, nil
 	} // KRdp uses its existing saved/manual login.
@@ -293,6 +295,7 @@ func (v *viewer) switchDisplay(enhanced, automatic bool) {
 		pipe: pipe, vmid: runtimeID, title: title, log: log, generation: v.generation, automatic: automatic, enhanced: enhanced, linux: linux, clipboard: clipboard, linuxMode: linuxMode, machineID: machineID}
 	if enhanced && linux {
 		v.wayland = capability.Mode == "wayland"
+		v.dynamicResolution = capability.DynamicResolution
 	}
 	if v.wayland {
 		v.automaticLogin = capability.login()
@@ -374,6 +377,7 @@ func (v *viewer) startRenderHost() {
 	})
 	// GPU-PV guests can reject a second Windows display stack while the old one is still open.
 	v.host.Sequential = !v.linux
+	v.resizeRenderer()
 	v.host.Begin(v.enhanced)
 }
 
@@ -484,6 +488,7 @@ func (v *viewer) resizeRenderer() {
 		dpi = 96
 	}
 	top, settings := v.contentLayout(rect[2], rect[3], dpi)
+	v.host.InitialDisplay = renderhost.Packet{Width: settings.width, Height: settings.height, DPI: uint32(dpi)}
 	v.layoutToolbar(dpi)
 	v.layoutNotice(settings.width, top, v.toolbarHeight(dpi), dpi)
 	shown, _, _ := user32.NewProc("IsWindowVisible").Call(v.hwnd)

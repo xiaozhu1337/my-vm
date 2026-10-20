@@ -124,11 +124,11 @@ func TestLinuxDisplayUsesProtocolBeforeLegacyCommands(t *testing.T) {
 			if r.Method != "GET" || r.URL.Path != "/v1/status" {
 				t.Fatal("new agent state used a legacy command")
 			}
-			data, _ := json.Marshal(guestops.Status{Protocol: 1, OS: test.os, Desktop: guestops.DesktopStatus{Mode: test.mode, State: test.state}})
+			data, _ := json.Marshal(guestops.Status{Protocol: 1, OS: test.os, Desktop: guestops.DesktopStatus{Mode: test.mode, State: test.state, DynamicResolution: test.os == "linux" && test.mode == "wayland"}})
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(data))}, nil
 		})}
 		got, err := displayFromGuest(client, test.kind)
-		if (err != nil) != test.fail || calls != 1 || !test.fail && got.Mode != test.mode || got.Username != "" || len(got.Password) != 0 {
+		if (err != nil) != test.fail || calls != 1 || !test.fail && (got.Mode != test.mode || !got.DynamicResolution) || got.Username != "" || len(got.Password) != 0 {
 			t.Fatalf("wrong status selection: mode=%s error=%v", got.Mode, err)
 		}
 	}

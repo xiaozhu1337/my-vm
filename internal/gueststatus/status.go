@@ -13,9 +13,10 @@ type Status struct {
 }
 
 type DesktopStatus struct {
-	Mode   string `json:"mode"`
-	State  string `json:"state"`
-	Reason string `json:"reason"`
+	Mode              string `json:"mode"`
+	State             string `json:"state"`
+	Reason            string `json:"reason"`
+	DynamicResolution bool   `json:"dynamic_resolution,omitempty"`
 }
 
 // A nil status means the agent has not reported recently; it never implies ready.
@@ -32,6 +33,9 @@ func (s Status) Validate() error {
 	}
 	if s.OS == "windows" && s.Desktop.Mode != "windows" || s.OS == "linux" && s.Desktop.Mode == "windows" {
 		return errors.New("desktop OS mismatch")
+	}
+	if s.Desktop.DynamicResolution && (s.OS != "linux" || s.Desktop.Mode != "wayland") {
+		return errors.New("invalid dynamic resolution capability")
 	}
 	switch s.Desktop.State {
 	case "ready", "available":

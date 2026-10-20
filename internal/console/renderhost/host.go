@@ -19,6 +19,7 @@ type Packet struct {
 	Window              uint64 `json:"window,omitempty"`
 	Kind                string `json:"kind"`
 	X, Y, Width, Height int32
+	DPI                 uint32 `json:"dpi,omitempty"`
 	Visible             bool
 }
 
@@ -30,6 +31,7 @@ type Worker struct {
 	Enhanced, Connected, LayoutReady, Failed bool
 	Authenticating                           bool
 	ConnectDeadline                          time.Time
+	initialDisplay                           Packet
 	ctx                                      context.Context
 	cancel                                   context.CancelFunc
 	commands                                 chan Packet
@@ -62,6 +64,7 @@ type event struct {
 type Host struct {
 	Active, Candidate *Worker
 	Sequential        bool
+	InitialDisplay    Packet
 	generation        uint64
 	closed            bool
 	workers           map[*Worker]bool
@@ -92,6 +95,7 @@ func (h *Host) Begin(enhanced bool) bool {
 	h.generation++
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Worker{Generation: h.generation, Token: hex.EncodeToString(secret[:]), Enhanced: enhanced, ctx: ctx, cancel: cancel, commands: make(chan Packet, 16), layout: make(chan Packet, 1), done: make(chan struct{})}
+	w.initialDisplay = h.InitialDisplay
 	var retired []*Worker
 	if h.Sequential {
 		for previous := range h.workers {
@@ -287,7 +291,9 @@ func (h *Host) run(w *Worker, retired []*Worker) {
 			p.Token, p.Generation, p.PID = w.Token, w.Generation, cmd.Process.Pid
 			return encoder.Encode(p)
 		}
-		if write(Packet{Kind: "start"}) != nil {
+		start := w.initialDisplay
+		start.Kind = "start"
+		if write(start) != nil {
 			return
 		}
 		for {

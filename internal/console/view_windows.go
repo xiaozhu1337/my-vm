@@ -57,6 +57,7 @@ type viewer struct {
 	automatic, fallbackPending                                  bool
 	fallbackReason                                              string
 	enhanced, clipboard, linux, wayland, closed                 bool
+	dynamicResolution                                           bool
 	stopBridge                                                  func()
 	rdpPort                                                     int
 	pipe, vmid, title, status                                   string
@@ -352,6 +353,7 @@ func Run(args []string, log io.Writer) error {
 			return nil
 		}
 		v.wayland = capability.Mode == "wayland"
+		v.dynamicResolution = capability.DynamicResolution
 		v.automaticLogin = capability.login()
 		defer v.automaticLogin.clear()
 	}
@@ -529,16 +531,17 @@ func (v *viewer) initialize() error {
 	for _, setting := range []struct {
 		name  string
 		value any
-	}{{"RelativeMouseMode", !v.wayland}, {"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.enhanced && v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", true}} {
+	}{{"RelativeMouseMode", !v.wayland}, {"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.enhanced && v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", !v.wayland || !v.dynamicResolution}} {
 		if err = put(v.advanced, setting.name, setting.value); err != nil {
 			return err
 		}
 	}
 	server := v.vmid
 	if v.wayland {
-		// SmartSizing needs EnableZoom to enlarge a desktop beyond its native resolution.
-		if err = extended(v.client, "EnableZoom", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
-			return fmt.Errorf("启用 Linux 桌面画面缩放: %w", err)
+		if !v.dynamicResolution {
+			if err = extended(v.client, "EnableZoom", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
+				return fmt.Errorf("启用 Linux 桌面画面缩放: %w", err)
+			}
 		}
 		server = "127.0.0.1"
 		if err = put(v.advanced, "RDPPort", v.rdpPort); err != nil {
@@ -548,8 +551,18 @@ func (v *viewer) initialize() error {
 	if err = put(v.client, "Server", server); err != nil {
 		return err
 	}
-	_ = put(v.client, "DesktopWidth", 1280)
-	_ = put(v.client, "DesktopHeight", 720)
+	initial := v.initialDesktop()
+	if err = put(v.client, "DesktopWidth", initial.width); err != nil {
+		return err
+	}
+	if err = put(v.client, "DesktopHeight", initial.height); err != nil {
+		return err
+	}
+	if v.wayland && v.dynamicResolution {
+		if err = extended(v.client, "DesktopScaleFactor", ole.VARIANT{VT: ole.VT_UI4, Val: int64(min(initial.dpi*100/96, 500))}); err != nil {
+			return fmt.Errorf("设置 Linux 桌面缩放比例: %w", err)
+		}
+	}
 	_ = extended(v.client, "AllowAxToContainerEvents", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
 	_ = extended(v.client, "EnableHardwareMode", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
 	if !v.wayland {
@@ -642,11 +655,11 @@ func (v *viewer) resize() {
 	if connected && !v.display.connected {
 		v.setStatus(connectedNotice)
 	}
-	if !v.enhanced {
+	if !v.enhanced || v.wayland && !v.dynamicResolution {
 		v.display.connected = connected
 		return
 	}
-	if connected && !v.loggedIn {
+	if connected && !v.loggedIn && !v.wayland {
 		v.display.connected = true
 		v.setStatus("已连接 · 登录客户机后自动调整分辨率")
 		return

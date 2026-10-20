@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
 	"go.yaml.in/yaml/v3"
@@ -63,6 +64,27 @@ func (v *viewer) suppressConnectedNotice() {
 type displaySettings struct {
 	width, height int32
 	dpi           uintptr
+}
+
+func (v *viewer) initialDesktop() displaySettings {
+	if v.renderer != nil {
+		initial := v.renderer.InitialDisplay
+		return validDesktop(displaySettings{initial.Width, initial.Height, uintptr(initial.DPI)})
+	}
+	var rect [4]int32
+	user32.NewProc("GetClientRect").Call(v.hwnd, uintptr(unsafe.Pointer(&rect)))
+	dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(v.hwnd)
+	_, settings := v.contentLayout(rect[2], rect[3], max(dpi, 96))
+	return validDesktop(settings)
+}
+
+func validDesktop(settings displaySettings) displaySettings {
+	if settings.width < 200 || settings.height < 200 {
+		settings.width, settings.height = 1280, 720
+	}
+	settings.width, settings.height = min(settings.width, 8192), min(settings.height, 8192)
+	settings.dpi = min(max(settings.dpi, 96), 480)
+	return settings
 }
 
 func (v *viewer) contentLayout(width, height int32, dpi uintptr) (int32, displaySettings) {

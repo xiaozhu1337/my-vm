@@ -49,7 +49,7 @@ func (s statusTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestStatusProtocolRejectsInvalidAndBoundsResponses(t *testing.T) {
-	for _, mutate := range []func(*Status){func(s *Status) { s.Protocol = 2 }, func(s *Status) { s.OS = "other" }, func(s *Status) { s.Desktop.State = "okay" }, func(s *Status) { s.Desktop.Mode = "wayland" }, func(s *Status) { s.Desktop.Reason = "password secret" }} {
+	for _, mutate := range []func(*Status){func(s *Status) { s.Protocol = 2 }, func(s *Status) { s.OS = "other" }, func(s *Status) { s.Desktop.State = "okay" }, func(s *Status) { s.Desktop.Mode = "wayland" }, func(s *Status) { s.Desktop.Reason = "password secret" }, func(s *Status) { s.Desktop.DynamicResolution = true }} {
 		status := Status{Protocol: 1, OS: "windows", Desktop: DesktopStatus{Mode: "windows", State: "ready", Reason: "services_running"}}
 		mutate(&status)
 		if status.Validate() == nil {

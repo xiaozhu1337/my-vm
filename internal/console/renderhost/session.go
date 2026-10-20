@@ -10,13 +10,14 @@ import (
 
 // Session authenticates the inherited pipes before the renderer creates any native resources.
 type Session struct {
-	Token      string
-	Generation uint64
-	PID        int
-	input      *bufio.Scanner
-	output     *json.Encoder
-	commands   chan Packet
-	layout     chan Packet
+	Token          string
+	Generation     uint64
+	PID            int
+	InitialDisplay Packet
+	input          *bufio.Scanner
+	output         *json.Encoder
+	commands       chan Packet
+	layout         chan Packet
 }
 
 func Open(in io.Reader, out io.Writer, token string, generation uint64) (*Session, error) {
@@ -32,6 +33,7 @@ func Open(in io.Reader, out io.Writer, token string, generation uint64) (*Sessio
 	if json.Unmarshal(s.input.Bytes(), &p) != nil || !s.accept(p) || p.Kind != "start" {
 		return nil, errors.New("invalid renderer handshake")
 	}
+	s.InitialDisplay = p
 	return s, nil
 }
 

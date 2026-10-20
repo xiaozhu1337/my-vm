@@ -73,6 +73,16 @@ func pumpUntil(t *testing.T, h *Host, condition func() bool) {
 	}
 }
 
+func TestRendererReceivesInitialDesktopBeforeConnecting(t *testing.T) {
+	h := fakeHost(t, "initial-display")
+	h.InitialDisplay = Packet{Width: 1720, Height: 1200, DPI: 144}
+	if !h.Begin(true) {
+		t.Fatal("renderer did not start")
+	}
+	h.InitialDisplay = Packet{Width: 1, Height: 1}
+	pumpUntil(t, h, func() bool { return h.Active != nil })
+}
+
 func TestProcessPromotionAndExplicitClose(t *testing.T) {
 	h := fakeHost(t, "connected")
 	if !h.Begin(false) {
@@ -506,6 +516,9 @@ func TestRendererProcessHelper(t *testing.T) {
 	s, err := Open(os.Stdin, os.Stdout, token, gen)
 	if err != nil {
 		os.Exit(2)
+	}
+	if scenario == "initial-display" && (s.InitialDisplay.Width != 1720 || s.InitialDisplay.Height != 1200 || s.InitialDisplay.DPI != 144) {
+		os.Exit(4)
 	}
 	s.Report("window", uintptr(os.Getpid()))
 	if scenario == "basic-then-exit" && gen > 1 {

@@ -13,6 +13,8 @@ import (
 	"time"
 	"unsafe"
 
+	"my-vm/internal/console/renderhost"
+
 	ole "github.com/go-ole/go-ole"
 )
 
@@ -100,6 +102,19 @@ func TestConnectedNoticePreferenceFailuresStayVisible(t *testing.T) {
 	v.toolbarCommand(toolbarConfirm, 501)
 	if v.hideConnectedNotice || v.headerHidden || !v.statusError {
 		t.Fatal("failed save silently dismissed the notice", v.status)
+	}
+}
+
+func TestInitialDesktopUsesHostDimensionsAndDPI(t *testing.T) {
+	for _, test := range []struct{ input, want displaySettings }{
+		{displaySettings{1720, 1200, 144}, displaySettings{1720, 1200, 144}},
+		{displaySettings{1, 1, 0}, displaySettings{1280, 720, 96}},
+		{displaySettings{20000, 12000, 960}, displaySettings{8192, 8192, 480}},
+	} {
+		v := &viewer{renderer: &renderhost.Session{InitialDisplay: renderhost.Packet{Width: test.input.width, Height: test.input.height, DPI: uint32(test.input.dpi)}}}
+		if got := v.initialDesktop(); got != test.want {
+			t.Fatalf("initial desktop = %v, want %v", got, test.want)
+		}
 	}
 }
 
