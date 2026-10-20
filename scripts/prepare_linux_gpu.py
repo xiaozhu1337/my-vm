@@ -1,6 +1,6 @@
 # Run inside the guest: sudo python3 prepare_linux_gpu.py
 from pathlib import Path
-from urllib.request import ProxyHandler, build_opener
+from urllib.request import build_opener
 
 import os
 import subprocess
@@ -15,10 +15,7 @@ commit = "d504d40ab83839cb61942a812a99d183c42227b9"
 root = Path("/usr/src/dxgkrnl-6.18-d504d40")
 root.mkdir()  # Refuse to overwrite an existing source directory.
 
-opener = build_opener(ProxyHandler({
-    "http": "http://192.168.1.99:7890",
-    "https": "http://192.168.1.99:7890",
-}))
+opener = build_opener()
 base = f"https://raw.githubusercontent.com/microsoft/WSL2-Linux-Kernel/{commit}/"
 names = [
     "dxgmodule.c", "hmgr.c", "misc.c", "dxgadapter.c",
