@@ -15,7 +15,7 @@
 - **按虚拟机隔离的目录共享。** 只共享选定的主机目录，默认只读，使用 Hyper-V Socket 私有通道，不向宿主网络开放 TCP 文件共享端口。
 - **命令行自动化。** 独立 CLI 支持虚拟机启停、快照、客户机命令执行及单文件双向传输。
 - **后台操作保持界面可用。** 控制台渲染采用独立进程；后台作业只占用对应虚拟机，其他虚拟机仍可管理。
-- **离线安装增强工具。** Windows/Linux 使用各自的增强盘；Linux 盘包含 Ubuntu/Kubuntu 26.04、26.10 amd64 所需依赖。
+- **轻量增强盘。** Windows/Linux 使用各自的增强盘；Linux 支持 Ubuntu/Kubuntu 26.04、26.10 amd64，安装时从客户机已配置的 APT 软件源下载所需依赖。
 
 ## 界面截图
 
@@ -65,7 +65,7 @@ my-vm/
 2. 右键虚拟机启动，通过基础控制台正常安装操作系统。
 3. 从右键菜单选择“安装增强能力”，挂载对应系统的增强盘。
 4. Windows：用已登录桌面用户运行光盘内的 `install.exe`，完成管理员授权。增强会话需要支持 RDP 服务端的客户机版本，以及设置了登录密码的账户。
-5. Ubuntu/Kubuntu：在已登录的 GNOME/KDE Wayland 桌面终端运行 `python3 "/实际光盘路径/install.py"`。使用当前桌面用户运行，不加 `sudo`，在授权提示中确认权限。
+5. Ubuntu/Kubuntu：先确保客户机能够联网，在已登录的 GNOME/KDE Wayland 桌面终端运行 `python3 "/实际光盘路径/install.py"`。使用当前桌面用户运行，不加 `sudo`，在授权提示中确认权限。安装沿用客户机的 APT 软件源和签名校验；需要代理时请配置客户机的系统 APT 代理。下载或安装失败会中止并报错，修复网络或软件包问题后可重新运行。
 6. 重新打开画面。自动模式先显示基础控制台，再按可用状态尝试增强连接；也可通过工具栏手动切换。
 
 GNOME/KDE 工具会生成独立连接凭据，通过虚拟机私有通道交换。密钥环/钱包授权、未知证书确认、客户机登录与解锁仍可能需要用户操作。剪贴板支持的格式由客户机桌面服务决定。
@@ -114,13 +114,13 @@ mise exec go@1.27.2 -- go build -trimpath -ldflags=-H=windowsgui -o "dist/my-vm.
 mise exec go@1.27.2 -- go build -trimpath -o "dist/my-vm-cli.exe" ./cmd/my-vm-cli
 ```
 
-需要同时构建通用离线增强盘时：
+需要同时构建通用增强盘时：
 
 ```text
 mise exec python@3.12 -- python -X utf8 "scripts/build.py"
 ```
 
-首次制作光盘需下载 Ubuntu 依赖，并在默认 WSL 发行版中提供 Docker。构建遵循 `HTTP_PROXY`/`HTTPS_PROXY` 环境设置，之后会校验并复用 `dist/guest-payload` 缓存。GPU-PV 另需兼容客户机内核和与宿主匹配的驱动，支持范围取决于实际硬件。
+首次制作光盘会下载通用 GPU 模块源码和许可文本，之后校验并复用 `dist/guest-payload` 缓存，不再收集 Ubuntu 软件包，也不需要 Docker/WSL。构建遵循 `HTTP_PROXY`/`HTTPS_PROXY` 环境设置。Linux 客户机安装增强时需要联网；GPU-PV 另需兼容客户机内核和与宿主匹配的驱动，支持范围取决于实际硬件。
 
 ```text
 mise exec go@1.27.2 -- go test ./...

@@ -1,4 +1,4 @@
-"""Build the manager and separate Windows/Linux offline enhancement discs with mise Go."""
+"""Build the manager and portable Windows/Linux enhancement discs with mise Go."""
 import os
 from pathlib import Path
 import shutil
@@ -9,7 +9,6 @@ from guest_media.validate import verified_files
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / 'dist'
-VERSIONS = ('26.04', '26.10')
 
 
 def run(*args, env=None):
@@ -77,12 +76,14 @@ def build_disc(platform, payloads):
                  'Exec=python3 -c "import runpy,sys,urllib.parse,pathlib; '
                  "runpy.run_path(str(pathlib.Path(urllib.parse.unquote(urllib.parse.urlparse(sys.argv[1]).path)).with_name('install.py')), run_name='__main__')\" %k\n")
             text('README.txt',
-                 'MyVM Linux 离线客户机增强盘\n\n'
+                 'MyVM Linux 客户机增强盘（联网安装依赖）\n\n'
                  'Ubuntu / Kubuntu 26.04、26.10 amd64: 在已登录的 GNOME/KDE Wayland 桌面终端运行：\n'
                  'python3 "/media/实际光盘路径/install.py"\n'
                  '默认安装全部适用增强功能，无需 --install；请勿使用 sudo，在授权窗口确认管理员权限。\n'
                  '也可在文件管理器允许启动 install.desktop；若桌面阻止光盘启动器，请使用上述终端命令。\n'
-                 '包含本地依赖、共享目录、远程桌面证书和服务、自启动；不访问互联网仓库。\n'
+                 '请保持客户机联网，安装器从系统 APT 软件源下载当前桌面所需依赖，不捆绑 Ubuntu 软件包。\n'
+                 '网络或软件源错误会中止安装并明确报错；修复后可重新运行安装器。\n'
+                 '安装共享目录、远程桌面证书和服务、自启动；保留系统软件源与签名校验。\n'
                  'GNOME/KDE 自动生成独立连接凭据，分别存入密钥环/KWallet，并按虚拟机回传保存到宿主凭据管理器。\n'
                  '无需输入 Linux 系统密码；KDE 首次可能需解锁钱包并允许 KRDP 访问。\n'
                  '请先由新版管理器启动客户机；宿主保存失败时会报错，可修正后重新安装。\n'
@@ -91,17 +92,6 @@ def build_disc(platform, payloads):
                  '安装后关闭安装用窗口，在主机点击“打开画面”；无需首次手输连接密码，仍需核对未知证书。\n'
                  '保留 TLS 与认证，桌面需保持已登录；剪贴板与显示调整由原生服务协商。\n'
                  'GPU-PV 仅在已验证的内核和宿主驱动组合下自动准备并运行 CUDA 自检。\n')
-            linux = stage / 'linux'
-            directory(linux)
-            for version in VERSIONS:
-                source = DIST / 'guest-payload' / ('ubuntu-' + version)
-                target = linux / source.name
-                directory(target)
-                directory(target / 'pool')
-                for name in ('manifest.yaml', 'Packages'):
-                    link(source / name, target / name)
-                for package in payloads[version]:
-                    link(package, target / 'pool' / package.name)
             source = DIST / 'guest-payload' / 'gpu-source'
             payload(source, payloads['gpu-source'], stage / 'gpu')
         text('GPU-HOST-DRIVERS.txt',
@@ -123,10 +113,7 @@ def build_disc(platform, payloads):
 
 def main():
     DIST.mkdir(exist_ok=True)
-    for version in VERSIONS:
-        if not (DIST / 'guest-payload' / ('ubuntu-' + version) / 'manifest.yaml').is_file():
-            run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / 'collect_packages.py'), version)
-    payloads = {version: verified_files(DIST / 'guest-payload' / ('ubuntu-' + version)) for version in VERSIONS}
+    payloads = {}
     source = DIST / 'guest-payload' / 'gpu-source'
     if not (source / 'manifest.yaml').is_file():
         run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / 'gpu.py'), '--source-only')

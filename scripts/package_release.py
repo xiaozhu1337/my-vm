@@ -46,8 +46,11 @@ def package():
         names = run(str(Path(os.environ['SystemRoot']) / 'System32/tar.exe'), '-tf', str(source))
         if 'windows-gpu/' in names or 'gpu/drivers/' in names or 'gpu/lib/' in names:
             raise ValueError('Release ISO contains host-specific GPU binaries: ' + str(source))
-        if platform == 'linux' and 'gpu/source/dxgmodule.c' not in names:
-            raise ValueError('Linux release ISO is missing portable dxgkrnl source')
+        if platform == 'linux':
+            if 'gpu/source/dxgmodule.c' not in names:
+                raise ValueError('Linux release ISO is missing portable dxgkrnl source')
+            if any(name.startswith('linux/') or name.endswith('.deb') for name in names.splitlines()):
+                raise ValueError('Linux release ISO contains obsolete offline Ubuntu packages')
     descriptions = []
     for module in modules():
         if module.get('Main') or 'Dir' not in module:
@@ -71,11 +74,9 @@ def package():
                'based on commit d504d40ab83839cb61942a812a99d183c42227b9. Its complete bundled\n'
                'source and COPYING/GPL-2.0 license texts are in gpu/ on that ISO.\n'
                'Upstream: https://github.com/microsoft/WSL2-Linux-Kernel\n\n'
-               'Ubuntu binary packages in linux/ retain their original package metadata and\n'
-               'copyright/license files. Package names, versions and hashes are in each\n'
-               'manifest.yaml and Packages index. Corresponding source packages are available\n'
-               'from https://archive.ubuntu.com/ubuntu/ and https://launchpad.net/ubuntu/+source\n'
-               'under their individual licenses.\n\n'
+               'Linux desktop and build dependencies are downloaded during installation using\n'
+               'the guest\'s configured APT repositories and signature verification. No Ubuntu\n'
+               'binary packages are bundled in this ZIP.\n\n'
                'No host-specific GPU or WSL proprietary driver binaries are redistributed in\n'
                'this ZIP. With GPU sharing enabled, My VM prepares separate private media\n'
                'from the current host at the user\'s request.\n\n'

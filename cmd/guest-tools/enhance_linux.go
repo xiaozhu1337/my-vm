@@ -30,14 +30,14 @@ func installEnhancements() error {
 	if err != nil {
 		return err
 	}
-	if _, _, err = linuxPayload(mediaRoot); err != nil {
+	if err = validateLinuxGuest(); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	fmt.Println("验证离线包完成，正在请求管理员授权安装系统组件；不访问在线仓库。")
+	fmt.Println("正在请求管理员授权安装系统组件；将从客户机系统软件源联网下载所需依赖。")
 	if err = guestCommand("pkexec", exe, "--prepare", "--media", mediaRoot, "--desktop", kind); err != nil {
 		return err
 	}

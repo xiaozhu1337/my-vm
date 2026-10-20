@@ -14,11 +14,6 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-var gpuPackages = map[string]bool{
-	"build-essential": true, "dkms": true, "libelf-dev": true, "gcc-15": true,
-	"linux-headers-7.3.0-9": true, "linux-headers-7.3.0-9-generic": true,
-}
-
 func gpuPresent(root string) bool {
 	entries, _ := os.ReadDir(root)
 	for _, entry := range entries {

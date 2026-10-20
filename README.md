@@ -15,7 +15,7 @@ A native Windows virtual machine manager for Windows and Linux guests, built on 
 - **Private folder sharing.** Share selected folders through a VM-specific Hyper-V Socket channel. Folders default to read-only; the host does not expose a TCP file-sharing port.
 - **Useful automation.** A separate CLI controls VMs and snapshots, executes guest commands, and transfers individual files in either direction.
 - **Responsive management.** Console rendering runs in separate processes. Background jobs reserve the affected VM while other VMs remain manageable.
-- **Offline guest setup.** Separate Windows and Linux enhancement discs install desktop integration and folder-sharing tools. The Linux disc includes dependencies for Ubuntu/Kubuntu 26.04 and 26.10 amd64.
+- **Small guest-tools discs.** Separate Windows and Linux discs install desktop integration and folder-sharing tools. Linux setup downloads only the required dependencies from the guest's configured APT repositories for Ubuntu/Kubuntu 26.04 and 26.10 amd64.
 
 ## Screenshots
 
@@ -65,7 +65,7 @@ Extract the complete archive into a writable folder, keep the enhancement ISOs n
 2. Right-click the VM to start it and open the basic console. Install the operating system normally.
 3. Choose **Install enhancements** from the VM's context menu to attach the appropriate guest-tools disc.
 4. In Windows, run `install.exe` from the disc as the logged-in desktop user and approve elevation. Windows enhanced sessions require a guest edition with an RDP server and an account with a login password.
-5. In Ubuntu/Kubuntu, run `python3 "/path/to/mounted/disc/install.py"` from a logged-in GNOME/KDE Wayland desktop. Run it as your desktop user, without `sudo`; approve the permission prompt when requested.
+5. In Ubuntu/Kubuntu, connect the guest to the internet, then run `python3 "/path/to/mounted/disc/install.py"` from a logged-in GNOME/KDE Wayland desktop. Run it as your desktop user, without `sudo`; approve the permission prompt when requested. Setup uses the guest's existing APT repositories and signature checks; configure a system APT proxy if your network requires one. Download or installation failures stop setup with an error; fix the network or package issue and rerun it.
 6. Reopen the console. Automatic mode starts with the basic console and tries an enhanced session when appropriate. The toolbar also lets you switch modes manually.
 
 GNOME/KDE tools generate separate connection credentials and exchange them through the VM's private channel. Keyring/wallet approval, unknown-certificate confirmation, guest login, and unlocking may still need user interaction. Clipboard formats depend on the guest's desktop service.
@@ -114,13 +114,13 @@ mise exec go@1.27.2 -- go build -trimpath -ldflags=-H=windowsgui -o "dist/my-vm.
 mise exec go@1.27.2 -- go build -trimpath -o "dist/my-vm-cli.exe" ./cmd/my-vm-cli
 ```
 
-To also build the portable offline enhancement discs:
+To also build the portable enhancement discs:
 
 ```text
 mise exec python@3.12 -- python -X utf8 "scripts/build.py"
 ```
 
-The first media build downloads Ubuntu dependencies and needs Docker inside the default WSL distribution. Standard `HTTP_PROXY`/`HTTPS_PROXY` settings are respected. Later builds verify and reuse `dist/guest-payload`. GPU-PV requires compatible guest kernels and host-matched drivers; support is hardware-dependent.
+The first media build downloads portable GPU module source and license texts; later builds verify and reuse `dist/guest-payload`. It does not collect Ubuntu packages or require Docker/WSL. Standard `HTTP_PROXY`/`HTTPS_PROXY` settings are respected. Linux guests need network access during enhancement installation. GPU-PV requires compatible guest kernels and host-matched drivers; support is hardware-dependent.
 
 ```text
 mise exec go@1.27.2 -- go test ./...
