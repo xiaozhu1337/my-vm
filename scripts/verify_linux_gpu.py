@@ -45,7 +45,7 @@ major,minor=C.c_int(),C.c_int();call('cuDeviceComputeCapability',C.byref(major),
 version=C.c_int();call('cuDriverGetVersion',C.byref(version))
 report={'device':name.value.decode(),'uuid':'GPU-'+str(uuid.UUID(bytes=bytes(identity))),'compute_capability':[major.value,minor.value],'driver_api':version.value,'trials':[]}
 print('DEVICE',json.dumps(report),flush=True)
-if b'5070 Ti' not in name.value:raise RuntimeError('Unexpected CUDA device: '+name.value.decode())
+if major.value < 8:raise RuntimeError('CUDA self-check requires compute capability 8.0 or later: '+str([major.value,minor.value]))
 context,module,function=C.c_void_p(),C.c_void_p(),C.c_void_p()
 pointers=[]
 call('cuDevicePrimaryCtxRetain',C.byref(context),device)

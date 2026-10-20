@@ -77,6 +77,7 @@ func (a *application) runDisk(label string, machine vm.Machine, targetID string,
 					done()
 				}
 			}
+			a.cleanupGuestMedia()
 			if a.window != nil {
 				a.window.Invalidate()
 			}

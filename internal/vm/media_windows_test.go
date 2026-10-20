@@ -12,6 +12,18 @@ import (
 	"my-vm/internal/media"
 )
 
+func TestGuestMediaOwnership(t *testing.T) {
+	manager := NewManager(t.TempDir(), io.Discard)
+	manager.sessions["running"] = &session{machine: Machine{ISO: `C:\VM\guest-tools-1.iso`, DriverISO: `C:\VM\guest-tools-2.iso`}}
+	if !manager.GuestMediaInUse(`c:/vm/./GUEST-TOOLS-1.ISO`) || !manager.GuestMediaInUse(`C:\VM\guest-tools-2.iso`) || manager.GuestMediaInUse(`C:\VM\other.iso`) {
+		t.Fatal("media ownership must include all running sessions and ignore path case")
+	}
+	delete(manager.sessions, "running")
+	if manager.GuestMediaInUse(`C:\VM\guest-tools-1.iso`) {
+		t.Fatal("stopped session kept an obsolete media reference")
+	}
+}
+
 func TestGuestMediaValidation(t *testing.T) {
 	manager := NewManager(t.TempDir(), io.Discard)
 	for _, path := range []string{"relative.iso", filepath.Join(t.TempDir(), "missing.iso"), t.TempDir()} {
@@ -58,6 +70,9 @@ func TestHCSGuestMedia(t *testing.T) {
 		if err := manager.MountGuestMedia(machine.ID, image); err != nil {
 			t.Fatalf("insert %d: %v", attempt, err)
 		}
+	}
+	if !manager.GuestMediaInUse(image) || manager.GuestMediaInUse(image+".missing") {
+		t.Fatal("mounted media ownership was lost")
 	}
 	if err := manager.Control(machine.ID, "stop"); err != nil {
 		t.Fatal(err)

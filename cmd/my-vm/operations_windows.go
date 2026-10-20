@@ -15,6 +15,7 @@ type configurationSave struct {
 	id, label string
 	update    func(*vm.Config) error
 	done      func()
+	finalize  func()
 }
 
 func (a *application) beginOperation(id, label string) bool {
@@ -39,6 +40,7 @@ func (a *application) finishOperation(id, label string, err error, done func()) 
 			done()
 		}
 	}
+	a.cleanupGuestMedia()
 	if a.window != nil {
 		a.window.Invalidate()
 	}
@@ -48,18 +50,25 @@ func (a *application) run(id, label string, work func() error, done func()) {
 	a.runConfig(id, label, work, nil, done)
 }
 
-func (a *application) runConfig(id, label string, work func() error, update func(*vm.Config) error, done func()) {
+func (a *application) runConfig(id, label string, work func() error, update func(*vm.Config) error, done func(), finalize ...func()) {
 	if !a.beginOperation(id, label) {
 		return
+	}
+	var settled func()
+	if len(finalize) > 0 {
+		settled = finalize[0]
 	}
 	go func() {
 		err := work()
 		mygo.RunOnMain(func() {
 			if err != nil || update == nil {
+				if settled != nil {
+					settled()
+				}
 				a.finishOperation(id, label, err, done)
 				return
 			}
-			a.queueConfiguration(configurationSave{id: id, label: label, update: update, done: done})
+			a.queueConfiguration(configurationSave{id: id, label: label, update: update, done: done, finalize: settled})
 		})
 	}()
 }
@@ -116,6 +125,9 @@ func (a *application) acceptConfiguration(cfg vm.Config, err error) {
 				break
 			}
 		}
+	}
+	if save.finalize != nil {
+		save.finalize()
 	}
 	a.finishOperation(save.id, save.label, err, save.done)
 }

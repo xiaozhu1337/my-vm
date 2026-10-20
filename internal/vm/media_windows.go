@@ -11,6 +11,29 @@ import (
 	"strings"
 )
 
+func SameMediaFile(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	if strings.EqualFold(filepath.Clean(left), filepath.Clean(right)) {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
+}
+
+func (m *Manager) GuestMediaInUse(path string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, session := range m.sessions {
+		if SameMediaFile(session.machine.ISO, path) || SameMediaFile(session.machine.DriverISO, path) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) MountGuestMedia(id, path string) error {
 	if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Ext(path), ".iso") {
 		return errors.New("增强光盘必须使用 ISO 文件的绝对路径")

@@ -4,12 +4,66 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"my-vm/internal/vm"
 )
+
+func TestPreparedMediaCleanupPreservesReferences(t *testing.T) {
+	a := testApplication(t, 2)
+	folder := t.TempDir()
+	paths := []string{filepath.Join(folder, "obsolete.iso"), filepath.Join(folder, "configured.iso"), filepath.Join(folder, "draft.iso")}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("private image"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.preparedMedia = map[string]bool{paths[0]: true, paths[1]: true, paths[2]: true}
+	a.config.Machines[1].DriverISO = paths[1]
+	a.page, a.draft.DriverISO = "edit", paths[2]
+	a.cleanupGuestMedia()
+	if _, err := os.Stat(paths[0]); !os.IsNotExist(err) {
+		t.Fatal("unreferenced private image was not removed", err)
+	}
+	for _, path := range paths[1:] {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatal("referenced private image removed", err)
+		}
+	}
+	a.config.Machines[1].DriverISO, a.page = "", ""
+	a.finishOperation("media-test", "test", errors.New("save failed"), nil)
+	if len(a.preparedMedia) != 0 {
+		t.Fatal("failed operation left unused private media", a.preparedMedia)
+	}
+}
+
+func TestPreparedMediaCleanupWaitsForQueuedReferences(t *testing.T) {
+	a := testApplication(t, 2)
+	path := filepath.Join(t.TempDir(), "generated.iso")
+	if err := os.WriteFile(path, []byte("private image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.preparedMedia = map[string]bool{path: true}
+	a.configurationSaves = []configurationSave{{id: a.config.Machines[1].ID}}
+	a.cleanupGuestMedia()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("queued save lost its media", err)
+	}
+	a.configurationSaves = nil
+	a.config.Machines[1].ISO = strings.ReplaceAll(path, `\`, "/")
+	a.cleanupGuestMedia()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("installation drive reference was ignored", err)
+	}
+	a.config.Machines[1].ISO = ""
+	a.cleanupGuestMedia()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("unreferenced generated media retained", err)
+	}
+}
 
 func TestDiskJobAllowsNavigationAndBlocksSourceActions(t *testing.T) {
 	a := testApplication(t, 2)

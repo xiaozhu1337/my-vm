@@ -56,19 +56,15 @@ func (a *application) shareEditor(c *ui.Context) {
 			a.draft.Shares = append(a.draft.Shares, vm.Share{Name: name, ReadOnly: true})
 		}
 		muted(c, "共享名称使用英文字母开头，可包含字母、数字、下划线和连字符。Windows 自动分配空闲盘符；Linux 在文件管理器中显示共享目录。")
-		if button(c, "挂载客户机工具光盘", true) {
-			machine := a.draft
-			id, version := machine.ID, a.editVersion
-			var target string
-			a.run(id, "读取增强光盘", func() error {
-				var err error
-				target, err = enhancementDisc(machine)
-				return err
-			}, func() {
-				if a.page == "edit" && a.draft.ID == id && a.editVersion == version {
-					a.draft.DriverISO = target
-				}
-			})
+		if a.draft.GPUShared {
+			muted(c, "保存或完成复制后，在虚拟机菜单选择“安装增强能力”，从当前宿主准备匹配的 GPU 驱动光盘。")
+		} else if button(c, "挂载客户机工具光盘", true) {
+			target, err := enhancementDisc(a.draft)
+			if err != nil {
+				a.report(err)
+			} else {
+				a.draft.DriverISO = target
+			}
 		}
 		if a.draft.DriverISO != "" {
 			infoRow(c, "工具光盘", a.draft.DriverISO)

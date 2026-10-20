@@ -1,18 +1,19 @@
 """Collect the validated Linux GPU-PV source and matching local Windows driver snapshot."""
+import argparse
 import ast
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 from urllib.request import ProxyHandler, build_opener
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = 'd504d40ab83839cb61942a812a99d183c42227b9'
-DRIVER = Path('C:/Windows/System32/DriverStore/FileRepository/nvlesi.inf_amd64_33018540a16fd177')
 
 
-def collect():
-    target = ROOT / 'dist' / 'guest-payload' / 'gpu'
+def collect(source_only=False):
+    target = ROOT / 'dist' / 'guest-payload' / ('gpu-source' if source_only else 'gpu')
     target.mkdir(parents=True, exist_ok=True)
     records = []
 
@@ -22,7 +23,7 @@ def collect():
         path.write_bytes(data)
         records.append((name, hashlib.sha256(data).hexdigest()))
 
-    proxy = 'http://192.168.1.99:7890'
+    proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY') or ''
     opener = build_opener(ProxyHandler({'http': proxy, 'https': proxy}))
     names = ['dxgmodule.c', 'hmgr.c', 'misc.c', 'dxgadapter.c', 'ioctl.c', 'dxgvmbus.c',
              'dxgprocess.c', 'dxgsyncfile.c', 'dxgkrnl.h', 'dxgvmbus.h', 'hmgr.h', 'misc.h', 'dxgsyncfile.h']
@@ -44,28 +45,39 @@ def collect():
     assert set(generated) == {'gpu_p_guids.h', 'Makefile', 'dkms.conf'}
     for name, content in generated.items():
         save('source/' + name, content.encode('utf-8'))
-    groups = [
-        (Path('C:/Windows/System32/lxss/lib'), 'lib', ['libcuda.so', 'libcuda.so.1', 'libcuda.so.1.1', 'libnvidia-ml.so.1', 'nvidia-smi']),
-        (Path('C:/Program Files/WSL/lib'), 'lib', ['libd3d12.so', 'libd3d12core.so', 'libdxcore.so']),
-        (DRIVER, 'drivers/' + DRIVER.name, ['libcuda.so.1.1', 'libnvidia-ml.so.1', 'libnvdxgdmal.so.1',
-                                          'libnvidia-ptxjitcompiler.so.1', 'libnvidia-gpucomp.so', 'nvcubins.bin']),
-    ]
-    for source, directory, names in groups:
-        for name in names:
-            save(directory + '/' + name, (source / name).read_bytes())
     save('verify.py', (ROOT / 'scripts' / 'verify_linux_gpu.py').read_bytes())
-    inf = (DRIVER / 'nvlesi.inf').read_bytes()
-    assert inf == Path('C:/Windows/INF/oem87.inf').read_bytes(), 'Current display driver changed; select its matching DriverStore first'
-    lines = ['# Only this guest kernel and host driver snapshot have been validated.',
-             'kernel: "7.3.0-9-generic"', 'version: "6.18-d504d40"', 'driver: ' + json.dumps(DRIVER.name),
-             'host_inf: ' + json.dumps(str(DRIVER / 'nvlesi.inf')),
-             'host_inf_sha256: ' + hashlib.sha256(inf).hexdigest(),
-             '# Relative payload paths and their SHA-256 checksums.', 'files:']
+    lines = ['# Supported guest kernel and dxgkrnl source version.',
+             'kernel: "7.3.0-9-generic"', 'version: "6.18-d504d40"']
+    if not source_only:
+        from windows_gpu import installed_packages
+        adapters = [a for a in installed_packages() if a[2].lower().startswith('pci\\ven_10de')]
+        drivers = {a[3] for a in adapters}
+        if len(drivers) != 1:
+            raise RuntimeError('Exactly one installed NVIDIA driver package is required for Linux GPU-PV')
+        driver = drivers.pop()
+        system = Path(os.environ['SystemRoot']) / 'System32'
+        groups = [
+            (system / 'lxss/lib', 'lib', ['libcuda.so', 'libcuda.so.1', 'libcuda.so.1.1', 'libnvidia-ml.so.1', 'nvidia-smi']),
+            (Path(os.environ['ProgramFiles']) / 'WSL/lib', 'lib', ['libd3d12.so', 'libd3d12core.so', 'libdxcore.so']),
+            (driver, 'drivers/' + driver.name, ['libcuda.so.1.1', 'libnvidia-ml.so.1', 'libnvdxgdmal.so.1',
+                                             'libnvidia-ptxjitcompiler.so.1', 'libnvidia-gpucomp.so', 'nvcubins.bin']),
+        ]
+        for source, directory, names in groups:
+            for name in names:
+                save(directory + '/' + name, (source / name).read_bytes())
+        infs = list(driver.glob('*.inf'))
+        if len(infs) != 1:
+            raise RuntimeError('Installed driver package must contain exactly one INF')
+        lines += ['driver: ' + json.dumps(driver.name), 'host_inf: ' + json.dumps(str(infs[0])),
+                  'host_inf_sha256: ' + hashlib.sha256(infs[0].read_bytes()).hexdigest()]
+    lines += ['# Relative payload paths and their SHA-256 checksums.', 'files:']
     for name, digest in records:
         lines += ['  - name: ' + json.dumps(name), '    sha256: ' + digest]
     (target / 'manifest.yaml').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    print(f'GPU-PV: {len(records)} files, host driver {DRIVER.name}', flush=True)
+    print(f'GPU-PV: {len(records)} files, source_only={source_only}', flush=True)
 
 
 if __name__ == '__main__':
-    collect()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source-only', action='store_true')
+    collect(parser.parse_args().source_only)

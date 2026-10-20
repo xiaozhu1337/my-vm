@@ -150,7 +150,7 @@ func installWindowsGPU(media, directory, name string, allowChanges bool) (bool, 
 		}
 	}
 	if selected == nil {
-		return false, fmt.Errorf("增强盘中没有匹配 %s 的宿主驱动，请在当前宿主重新构建增强盘", name)
+		return false, fmt.Errorf("增强盘中没有匹配 %s 的宿主驱动，请在当前宿主重新选择“安装增强能力”", name)
 	}
 	expected := map[string]string{}
 	var records []windowsGPUFile

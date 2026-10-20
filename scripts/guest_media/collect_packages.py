@@ -13,14 +13,14 @@ from urllib.request import ProxyHandler, build_opener
 from registry import prepare_image
 
 ROOT = Path(__file__).resolve().parents[2]
-PROXY = 'http://192.168.1.99:7890'
+PROXY = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY') or ''
 PACKAGES = ['gnome-remote-desktop', 'krdp', 'gvfs-backends', 'gvfs-fuse',
             'libglib2.0-bin', 'libsecret-tools', 'kmod', 'pkexec', 'polkitd', 'gnome-keyring',
             'libkf6config-bin', 'kwallet6', 'xdg-desktop-portal', 'xdg-desktop-portal-kde']
 
 
 def docker_prefix():
-    return ['wsl.exe', '-d', 'archlinux', '--exec', 'docker'] if os.name == 'nt' else ['docker']
+    return ['wsl.exe', '--exec', 'docker'] if os.name == 'nt' else ['docker']
 
 
 def docker(*arguments, capture=False):

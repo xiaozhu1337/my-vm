@@ -13,7 +13,8 @@ VERSIONS = ('26.04', '26.10')
 
 
 def run(*args, env=None):
-    subprocess.run(args, cwd=ROOT, env=env, check=True, stdin=subprocess.DEVNULL)
+    subprocess.run(args, cwd=ROOT, env=env, check=True, stdin=subprocess.DEVNULL,
+                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
 
 
 def build_disc(platform, payloads):
@@ -66,9 +67,7 @@ def build_disc(platform, payloads):
                  '安装共享目录、远程桌面服务和登录自启动；不访问互联网仓库。\n'
                  'GPU-PV 首次准备或驱动升级请在基础控制台运行；已有驱动匹配且设备正常时可在增强会话重复安装。\n'
                  '安装后在主机点击“打开画面”，已就绪时自动使用增强；账户需设置登录密码。\n'
-                 'GPU 设备代码正常不代表硬件图形/计算已通过，兼容性见项目验证记录。\n')
-            source = DIST / 'guest-payload' / 'windows-gpu'
-            payload(source, payloads['windows-gpu'], stage / 'windows-gpu')
+                 'GPU 设备代码正常不代表硬件图形/计算已通过，需按实际驱动和硬件验证。\n')
         else:
             launcher = stage / 'install.py'
             shutil.copyfile(ROOT / 'scripts' / 'guest_media' / 'install.py', launcher)
@@ -103,8 +102,12 @@ def build_disc(platform, payloads):
                     link(source / name, target / name)
                 for package in payloads[version]:
                     link(package, target / 'pool' / package.name)
-            source = DIST / 'guest-payload' / 'gpu'
-            payload(source, payloads['gpu'], stage / 'gpu')
+            source = DIST / 'guest-payload' / 'gpu-source'
+            payload(source, payloads['gpu-source'], stage / 'gpu')
+        text('GPU-HOST-DRIVERS.txt',
+             'Host-specific GPU drivers are collected by My VM when installing enhancements with GPU sharing enabled.\n'
+             'The original release image remains unchanged; collection failures are reported before mounting.\n'
+             'Linux GPU-PV retains its supported NVIDIA and guest-kernel requirements.\n')
         image.unlink(missing_ok=True)
         run(str(DIST / 'my-vm.exe'), '--build-guest-media', str(stage), str(image))
         os.replace(image, target_iso)
@@ -124,16 +127,15 @@ def main():
         if not (DIST / 'guest-payload' / ('ubuntu-' + version) / 'manifest.yaml').is_file():
             run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / 'collect_packages.py'), version)
     payloads = {version: verified_files(DIST / 'guest-payload' / ('ubuntu-' + version)) for version in VERSIONS}
-    for name in ('gpu', 'windows_gpu'):
-        run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / (name + '.py')))
-        folder = name.replace('_', '-')
-        payloads[folder] = verified_files(DIST / 'guest-payload' / folder)
+    source = DIST / 'guest-payload' / 'gpu-source'
+    if not (source / 'manifest.yaml').is_file():
+        run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / 'gpu.py'), '--source-only')
+    payloads['gpu-source'] = verified_files(source)
     build_icon()
     run('mise', 'exec', 'go@1.27.2', '--', 'go', 'run',
         'github.com/tc-hib/go-winres@v0.3.3', 'simply', '--arch', 'amd64',
         '--manifest', 'none', '--icon', str(ROOT / 'assets' / 'my-vm.ico'),
-        '--out', str(ROOT / 'cmd' / 'my-vm' / 'rsrc'),
-        env=dict(os.environ, HTTP_PROXY='http://192.168.1.99:7890', HTTPS_PROXY='http://192.168.1.99:7890'))
+        '--out', str(ROOT / 'cmd' / 'my-vm' / 'rsrc'))
     run('mise', 'exec', 'go@1.27.2', '--', 'go', 'build', '-trimpath',
         '-o', str(DIST / 'my-vm-cli.exe'), './cmd/my-vm-cli',
         env=dict(os.environ, GOOS='windows', GOARCH='amd64', CGO_ENABLED='0'))

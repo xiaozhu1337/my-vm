@@ -30,6 +30,7 @@ type application struct {
 	closing, closeReady                     bool
 	operations                              map[string]string
 	configurationSaves                      []configurationSave
+	preparedMedia                           map[string]bool
 	diskJobs                                map[string]*diskJob
 	externalJobs                            map[string]bool
 	editVersion                             int
