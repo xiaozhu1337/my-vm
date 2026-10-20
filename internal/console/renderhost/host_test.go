@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -408,6 +409,35 @@ func TestSessionRejectsForgedHandshake(t *testing.T) {
 		if _, err := Open(strings.NewReader(string(data)+"\n"), os.Stdout, token, 1); err == nil {
 			t.Fatal("forged parent handshake accepted")
 		}
+	}
+}
+
+func TestSessionAuthenticatesFocusRelease(t *testing.T) {
+	token := strings.Repeat("a", 64)
+	var input strings.Builder
+	for _, packet := range []Packet{
+		{Kind: "start", Token: token, Generation: 1, PID: os.Getpid()},
+		{Kind: "release-focus", Token: strings.Repeat("b", 64), Generation: 1, PID: os.Getpid()},
+		{Kind: "release-focus", Token: token, Generation: 2, PID: os.Getpid()},
+		{Kind: "release-focus", Token: token, Generation: 1, PID: os.Getpid()},
+	} {
+		if err := json.NewEncoder(&input).Encode(packet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session, err := Open(strings.NewReader(input.String()), io.Discard, token, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wake := make(chan struct{}, 4)
+	session.Listen(func() { wake <- struct{}{} })
+	select {
+	case <-wake:
+		if packet := session.Next(); packet.Kind != "release-focus" || packet.Token != token || packet.Generation != 1 {
+			t.Fatal("focus release was lost or accepted without authentication", packet)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("focus release did not reach the renderer")
 	}
 }
 

@@ -69,6 +69,68 @@ func TestConsoleToolbarUsesStableMachineID(t *testing.T) {
 	}
 }
 
+func TestInputHandoverWaitsForEveryKeyRelease(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		key      byte
+		queued   byte
+		physical uintptr
+		want     bool
+	}{
+		{"no keys", 0, 0, 0, true},
+		{"queued Alt release not processed", 18, 0x80, 0, false},
+		{"Alt still physically down", 18, 0, 0x8000, false},
+		{"Tab still held", 9, 0x80, 0x8000, false},
+		{"mouse button", 1, 0, 0x8000, false},
+		{"queued W release not processed", 'W', 0x80, 0, false},
+		{"arrow still held", 0x27, 0, 0x8000, false},
+		{"space still held", 0x20, 0x80, 0x8000, false},
+		{"Caps Lock enabled", 0x14, 1, 1, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var queued [256]byte
+			queued[test.key] = test.queued
+			physical := func(key uintptr) uintptr {
+				if key == uintptr(test.key) {
+					return test.physical
+				}
+				return 0
+			}
+			if got := inputKeysReleased(queued, physical); got != test.want {
+				t.Fatalf("input released=%v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPointerChoosesGuestOnlyOverItsImage(t *testing.T) {
+	for _, test := range []struct {
+		name                             string
+		host, image, foreground, pointer uintptr
+		want                             uintptr
+	}{
+		{"image entered", 10, 20, 10, 20, 20},
+		{"image remains active", 10, 20, 20, 20, 20},
+		{"title bar", 10, 20, 20, 10, 10},
+		{"toolbar child resolves to host", 10, 20, 20, 10, 10},
+		{"title bar remains active", 10, 20, 10, 10, 10},
+		{"other application foreground", 10, 20, 30, 20, 0},
+		{"other console foreground", 10, 20, 30, 10, 0},
+		{"authentication dialog", 10, 20, 40, 40, 0},
+		{"image covered by another window", 10, 20, 20, 30, 0},
+		{"candidate image is not active", 10, 20, 10, 30, 0},
+		{"cursor lookup failed", 10, 20, 20, 0, 0},
+		{"host closed", 0, 20, 20, 20, 0},
+		{"image not ready", 10, 0, 10, 10, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pointerFocusTarget(test.host, test.image, test.foreground, test.pointer); got != test.want {
+				t.Fatalf("input target=%d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRendererFocusPreservesWindowOperations(t *testing.T) {
 	for _, test := range []struct {
 		name                       string
@@ -79,6 +141,7 @@ func TestRendererFocusPreservesWindowOperations(t *testing.T) {
 	}{
 		{"keyboard return", 10, 20, 10, false, 0, true},
 		{"already inside guest", 10, 20, 20, false, 0, true},
+		{"Alt+Tab has not been released", 10, 20, 10, true, 0, false},
 		{"title bar pressed before move loop", 10, 20, 10, true, 0, false},
 		{"drag starts after focus was queued", 10, 20, 10, true, 2, false},
 		{"keyboard move or resize", 10, 20, 10, false, 2, false},

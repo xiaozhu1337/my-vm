@@ -36,6 +36,7 @@ type viewer struct {
 	reportedLayout                                              bool
 	rendererTopmost, rendererLayoutVisible, rendererLayoutKnown bool
 	foregroundHook                                              uintptr
+	pointerRoot                                                 uintptr
 	hostTopmost, adjustingLayer                                 bool
 	hwnd, header, headerClose, child                            uintptr
 	headerHidden, statusError                                   bool
@@ -173,6 +174,7 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 		if v != nil && v.hwnd != 0 {
 			v.resize()
 			if msg == 0x113 {
+				v.syncPointerFocus(true)
 				v.pollRenderer()
 				v.checkEnhancedAvailability()
 			}
@@ -446,6 +448,9 @@ func Run(args []string, log io.Writer) error {
 		}
 		if ok == 0 {
 			break
+		}
+		if msg.Message == 0x200 || msg.Message == 0xa0 || msg.Message == 0x2a3 {
+			v.syncPointerFocus(false)
 		}
 		guestInput := uintptr(0)
 		if v.rendererMode {

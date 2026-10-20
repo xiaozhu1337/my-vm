@@ -55,7 +55,7 @@ func (s *Session) Listen(wake func()) {
 				continue
 			}
 			switch p.Kind {
-			case "close", "keys", "focus", "forget":
+			case "close", "keys", "focus", "release-focus", "forget":
 				s.commands <- p
 				wake()
 			case "layout":
