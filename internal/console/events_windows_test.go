@@ -2,7 +2,14 @@
 
 package console
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"my-vm/internal/console/renderhost"
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestSessionEventsRequireLoginBeforeWindowsDisplayUpdates(t *testing.T) {
 	v := &viewer{enhanced: true}
@@ -32,6 +39,27 @@ func TestSessionEventsRequireLoginBeforeWindowsDisplayUpdates(t *testing.T) {
 	v.sessionEvent(3)
 	if v.loggedIn {
 		t.Fatal("closed viewer accepted a late event")
+	}
+}
+
+func TestCertificateConfirmationSuspendsAutomaticConnectionDeadline(t *testing.T) {
+	var input, output bytes.Buffer
+	identity := renderhost.Packet{Kind: "start", Token: strings.Repeat("a", 64), Generation: 1, PID: os.Getpid()}
+	if err := json.NewEncoder(&input).Encode(identity); err != nil {
+		t.Fatal(err)
+	}
+	session, err := renderhost.Open(&input, &output, identity.Token, identity.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &viewer{renderer: session, hwnd: 1234, enhanced: true}
+	v.sessionEvent(18)
+	var packet renderhost.Packet
+	if err := json.NewDecoder(&output).Decode(&packet); err != nil {
+		t.Fatal(err)
+	}
+	if packet.Kind != "authenticating" || packet.Window != 1234 || packet.Token != identity.Token || packet.Generation != identity.Generation || packet.PID != identity.PID {
+		t.Fatal("certificate confirmation was not reported to the authenticated host", packet)
 	}
 }
 

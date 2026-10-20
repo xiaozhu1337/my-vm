@@ -377,8 +377,8 @@ func (v *viewer) finishToolbarAction() {
 }
 
 func (v *viewer) toolbarError(err error) {
-	v.revealHeader()
 	v.fail(err)
+	v.revealHeader()
 	v.layout = displaySettings{}
 	v.resize()
 }

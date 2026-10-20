@@ -387,7 +387,7 @@ func (v *viewer) switchRenderer(enhanced, automatic bool) {
 	}
 	v.automatic = automatic
 	v.clearPrompt()
-	if v.toolbar != nil {
+	if v.toolbar != nil && enhanced {
 		v.toolbar.availability.notified = true
 	}
 	if !enhanced {

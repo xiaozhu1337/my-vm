@@ -28,6 +28,8 @@ type Worker struct {
 	PID                                      int
 	Window                                   uint64
 	Enhanced, Connected, LayoutReady, Failed bool
+	Authenticating                           bool
+	ConnectDeadline                          time.Time
 	ctx                                      context.Context
 	cancel                                   context.CancelFunc
 	commands                                 chan Packet
@@ -104,7 +106,7 @@ func (h *Host) Begin(enhanced bool) bool {
 }
 
 // Poll validates an HWND's process and independent top-level window before admitting a packet.
-// A candidate has no deadline: authentication may legitimately take arbitrarily long.
+// Optional deadlines only bound transport attempts; authentication may take arbitrarily long.
 func (h *Host) Poll(validate func(Packet) bool) (changed, failed bool) {
 	for {
 		select {
@@ -162,6 +164,9 @@ func (h *Host) Poll(validate func(Packet) bool) (changed, failed bool) {
 			if w.Window != p.Window || w.Failed {
 				continue
 			}
+			if p.Kind == "authenticating" {
+				w.Authenticating = true
+			}
 			if p.Kind == "connected" {
 				w.Connected = true
 			}
@@ -169,6 +174,11 @@ func (h *Host) Poll(validate func(Packet) bool) (changed, failed bool) {
 				w.LayoutReady = true
 			}
 		default:
+			if w := h.Candidate; w != nil && !w.Connected && !w.Authenticating && !w.ConnectDeadline.IsZero() && !time.Now().Before(w.ConnectDeadline) {
+				w.Failed = true
+				w.cancel()
+				h.Candidate, failed = nil, true
+			}
 			if w := h.Candidate; w != nil && w.Connected && w.LayoutReady && !w.Failed {
 				old := h.Active
 				h.Active, h.Candidate = w, nil
@@ -315,7 +325,7 @@ func (h *Host) run(w *Worker, retired []*Worker) {
 	scanner.Buffer(make([]byte, 1024), 4096)
 	for scanner.Scan() {
 		var p Packet
-		if json.Unmarshal(scanner.Bytes(), &p) == nil && p.PID == cmd.Process.Pid && (p.Kind == "window" || p.Kind == "connected" || p.Kind == "layout-ready" || p.Kind == "failed") {
+		if json.Unmarshal(scanner.Bytes(), &p) == nil && p.PID == cmd.Process.Pid && (p.Kind == "window" || p.Kind == "connected" || p.Kind == "authenticating" || p.Kind == "layout-ready" || p.Kind == "failed") {
 			emit(p)
 		}
 	}

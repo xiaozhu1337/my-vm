@@ -364,6 +364,7 @@ func TestWindowsAutomaticEnhancementWithoutReadyProvider(t *testing.T) {
 				defer cancel()
 				host.Wait(ctx)
 			})
+			host.Sequential = !test.linux
 			host.Active = &renderhost.Worker{Connected: !test.disconnected}
 			bar := &consoleToolbar{busy: test.blocked}
 			v := &viewer{host: host, automatic: !test.manual, linux: test.linux, toolbar: bar, log: io.Discard}
@@ -372,16 +373,52 @@ func TestWindowsAutomaticEnhancementWithoutReadyProvider(t *testing.T) {
 				t.Fatalf("candidate=%v, want=%v, prompt=%v", host.Candidate != nil, test.want, bar.prompt)
 			}
 			if test.want {
-				if !host.Candidate.Enhanced || !bar.availability.notified {
-					t.Fatal("automatic attempt did not select enhanced mode")
+				if !host.Candidate.Enhanced || !bar.availability.attempted || bar.availability.notified || host.Candidate.ConnectDeadline.IsZero() {
+					t.Fatal("automatic attempt did not preserve future readiness detection")
 				}
 				host.Cancel()
 				v.applyEnhancedAvailability(test.state)
 				if host.Candidate != nil {
 					t.Fatal("automatic attempt repeated after failure or cancellation")
 				}
+				v.applyEnhancedAvailability("ready")
+				if host.Candidate == nil || !host.Candidate.Enhanced || !bar.availability.notified || !host.Candidate.ConnectDeadline.IsZero() {
+					t.Fatal("an early attempt blocked the later confirmed upgrade")
+				}
 			}
 		})
+	}
+}
+
+func TestWindowsAutomaticAttemptTimeoutRestoresBasic(t *testing.T) {
+	host := renderhost.New(func(*renderhost.Worker) *exec.Cmd {
+		cmd := exec.Command(os.Args[0], "-test.run=^$")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		return cmd
+	})
+	t.Cleanup(func() {
+		host.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		host.Wait(ctx)
+	})
+	host.Sequential = true
+	host.Active = &renderhost.Worker{Connected: true}
+	bar := &consoleToolbar{}
+	v := &viewer{host: host, automatic: true, toolbar: bar, log: io.Discard}
+	v.applyEnhancedAvailability("unknown")
+	if host.Candidate == nil || host.Active != nil {
+		t.Fatal("Windows did not begin sequential enhancement")
+	}
+	host.Candidate.ConnectDeadline = time.Now().Add(-time.Second)
+	v.pollRenderer()
+	if host.Candidate == nil || host.Candidate.Enhanced || !v.automatic || bar.availability.notified {
+		t.Fatal("stalled automatic attempt did not restore basic and preserve readiness detection")
+	}
+	host.Cancel()
+	v.applyEnhancedAvailability("ready")
+	if host.Candidate == nil || !host.Candidate.Enhanced {
+		t.Fatal("timeout blocked a later confirmed upgrade")
 	}
 }
 

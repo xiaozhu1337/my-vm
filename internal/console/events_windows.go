@@ -89,6 +89,9 @@ func (v *viewer) sessionEvent(id int32) {
 			v.setStatus("正在连接 Linux 桌面 · 请完成凭据和证书确认，窗口将保持打开")
 		}
 	case 18:
+		if v.renderer != nil {
+			v.renderer.Report("authenticating", v.hwnd)
+		}
 		if v.wayland {
 			v.setStatus("请核对并确认 Linux 远程桌面的证书 · 窗口将保持打开")
 		}

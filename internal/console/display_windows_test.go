@@ -73,11 +73,15 @@ func TestConnectedNoticeOptOutPersistsAndPreservesOtherMessages(t *testing.T) {
 	if next.headerHidden || next.canHideConnectedNotice() {
 		t.Fatal("the preference hid an error")
 	}
+	next.setStatus(connectedNotice)
 	next.showPrompt(promptShutdown)
 	if next.headerHidden || next.canHideConnectedNotice() || next.toolbar.prompt != promptShutdown {
 		t.Fatal("the preference hid a confirmation")
 	}
-	next.clearPrompt()
+	next.toolbarError(errors.New("关机请求失败"))
+	if next.headerHidden || !next.statusError {
+		t.Fatal("restoring the connected status while clearing a prompt hid its error")
+	}
 	next.toolbar.notice = "虚拟机已暂停"
 	next.setStatus(connectedNotice)
 	if next.headerHidden || next.canHideConnectedNotice() {

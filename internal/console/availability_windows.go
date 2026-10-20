@@ -37,6 +37,7 @@ type enhancedAvailability struct {
 	last               string
 	next               time.Time
 	checking, notified bool
+	attempted          bool
 }
 
 func (a *enhancedAvailability) start(now time.Time) bool {
@@ -240,9 +241,16 @@ func (v *viewer) applyEnhancedAvailability(state string) {
 		return
 	}
 	// HCS guests may have no WMI registration or agent; connecting triggers Windows' display service.
-	windowsAttempt := !v.linux && v.automatic && v.host.Active.BasicConnected() && (state == "available" || state == "unknown" || state == "unavailable")
+	windowsAttempt := !v.linux && !a.attempted && v.host.Active.BasicConnected() && (state == "available" || state == "unknown" || state == "unavailable")
 	if a.finish(renderhost.ShouldUpgrade(v.automatic, state) || windowsAttempt) {
 		v.switchRenderer(true, true)
+		if windowsAttempt {
+			// Keep probing after an early attempt so a later ready signal can still upgrade.
+			a.attempted, a.notified = true, false
+			if candidate := v.host.Candidate; candidate != nil {
+				candidate.ConnectDeadline = time.Now().Add(30 * time.Second)
+			}
+		}
 	}
 }
 

@@ -233,6 +233,54 @@ func TestFailureAndStaleGenerationPreserveActive(t *testing.T) {
 	}
 }
 
+func TestAutomaticTransportDeadlinePreservesAuthentication(t *testing.T) {
+	for _, test := range []struct {
+		name, kind       string
+		deadline, forged bool
+		wantFailure      bool
+	}{
+		{name: "automatic transport stalled", deadline: true, wantFailure: true},
+		{name: "certificate confirmation remains open", deadline: true, kind: "authenticating"},
+		{name: "login screen remains open", deadline: true, kind: "connected"},
+		{name: "manual connection has no deadline"},
+		{name: "untrusted authentication cannot suppress deadline", deadline: true, kind: "authenticating", forged: true, wantFailure: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := New(nil)
+			cancelled := false
+			w := &Worker{Generation: 1, Token: "candidate", PID: 20, Window: 20, Enhanced: true, cancel: func() { cancelled = true }}
+			if test.deadline {
+				w.ConnectDeadline = time.Now().Add(-time.Second)
+			}
+			h.Candidate, h.workers[w] = w, true
+			if test.kind != "" {
+				p := Packet{Generation: w.Generation, Token: w.Token, PID: w.PID, Window: w.Window, Kind: test.kind}
+				if test.forged {
+					p.Generation++
+				}
+				h.events <- event{w, p}
+			}
+			_, failed := h.Poll(func(Packet) bool { return true })
+			if failed != test.wantFailure || cancelled != test.wantFailure || (h.Candidate == nil) != test.wantFailure {
+				t.Fatalf("failed=%v cancelled=%v candidate=%v", failed, cancelled, h.Candidate)
+			}
+		})
+	}
+}
+
+func TestAuthenticationCrossesProcessPipeAndSuspendsDeadline(t *testing.T) {
+	h := fakeHost(t, "authenticating")
+	h.Sequential = true
+	h.Begin(true)
+	candidate := h.Candidate
+	pumpUntil(t, h, func() bool { return candidate.Authenticating })
+	candidate.ConnectDeadline = time.Now().Add(-time.Second)
+	_, failed := h.Poll(func(p Packet) bool { return p.Window == uint64(p.PID) })
+	if failed || h.Candidate != candidate || candidate.Connected {
+		t.Fatal("automatic transport deadline cancelled certificate confirmation")
+	}
+}
+
 func TestCandidateExitDoesNotCloseBasic(t *testing.T) {
 	h := fakeHost(t, "basic-then-exit")
 	h.Begin(false)
@@ -463,7 +511,9 @@ func TestRendererProcessHelper(t *testing.T) {
 	if scenario == "basic-then-exit" && gen > 1 {
 		os.Exit(0)
 	}
-	if scenario == "basic-then-failed" && gen > 1 {
+	if scenario == "authenticating" {
+		s.Report("authenticating", uintptr(os.Getpid()))
+	} else if scenario == "basic-then-failed" && gen > 1 {
 		s.Report("failed", uintptr(os.Getpid()))
 	} else if scenario != "basic-then-hung" || gen == 1 {
 		s.Report("connected", uintptr(os.Getpid()))
