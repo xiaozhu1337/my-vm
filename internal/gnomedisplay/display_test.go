@@ -18,7 +18,7 @@ func fixture() state {
 }
 
 func virtual() monitor {
-	return monitor{Spec: monitorSpec{"Meta-0", "Meta", "Remote desktop", "1"}, Modes: []mode{{ID: "1720x1200", Width: 1720, Height: 1200, PreferredScale: 1, Scales: []float64{1, 1.5, 2}, Properties: map[string]dbus.Variant{"is-current": dbus.MakeVariant(true)}}}}
+	return monitor{Spec: monitorSpec{"Meta-0", "MetaVendor", "Virtual remote monitor", "1"}, Modes: []mode{{ID: "1720x1200", Width: 1720, Height: 1200, PreferredScale: 1, Scales: []float64{1, 1.5, 2}, Properties: map[string]dbus.Variant{"is-current": dbus.MakeVariant(true)}}}}
 }
 
 func TestDisplayConfigWireSignatures(t *testing.T) {
@@ -59,8 +59,12 @@ func TestOnlyNewRemoteMonitorIsSelected(t *testing.T) {
 		t.Fatal(layout, err)
 	}
 	remote.Modes[0].Properties = nil
+	if _, err := remoteConfig(remote, 1); err != nil {
+		t.Fatal("could not reenable the remote monitor after a compositor reload", err)
+	}
+	remote.Modes = nil
 	if _, err := remoteConfig(remote, 1); err == nil {
-		t.Fatal("accepted a monitor without an active mode")
+		t.Fatal("accepted a monitor without an available mode")
 	}
 }
 
@@ -71,6 +75,8 @@ type fakeDisplay struct {
 	configurations [][]logicalConfig
 	fail           bool
 	applied        chan struct{}
+	getState       func(state) state
+	applyConfig    func([]logicalConfig) error
 }
 
 func (f *fakeDisplay) CallWithContext(_ context.Context, method string, _ dbus.Flags, args ...any) *dbus.Call {
@@ -83,6 +89,9 @@ func (f *fakeDisplay) CallWithContext(_ context.Context, method string, _ dbus.F
 			s.monitors = append(append([]monitor(nil), s.monitors...), virtual())
 		}
 		s.serial = uint32(f.calls)
+		if f.getState != nil {
+			s = f.getState(s)
+		}
 		return &dbus.Call{Body: []any{s.serial, s.monitors, s.logical, s.properties}}
 	}
 	if method != displayInterface+".ApplyMonitorsConfig" || args[1] != uint32(1) {
@@ -94,6 +103,9 @@ func (f *fakeDisplay) CallWithContext(_ context.Context, method string, _ dbus.F
 		if f.fail {
 			return &dbus.Call{Err: errors.New("compositor rejected change")}
 		}
+	}
+	if f.applyConfig != nil {
+		return &dbus.Call{Err: f.applyConfig(args[2].([]logicalConfig))}
 	}
 	return &dbus.Call{}
 }
@@ -128,6 +140,87 @@ func TestDesktopMovesAndRestoresOnDisconnectAndConfigurationError(t *testing.T) 
 		if !reflect.DeepEqual(f.configurations[1], original) {
 			t.Fatal("lost original monitor configuration", f.configurations[1])
 		}
+	}
+}
+
+func TestDesktopReappliesAfterResizeAndRetriesRestore(t *testing.T) {
+	f := &fakeDisplay{current: fixture(), applied: make(chan struct{})}
+	resized, repaired, restoreAttempts := false, make(chan struct{}), 0
+	f.getState = func(s state) state {
+		if resized && len(s.monitors) == 2 {
+			s.monitors[1].Modes = []mode{{ID: "1920x1080", Width: 1920, Height: 1080, PreferredScale: 1, Scales: []float64{1}}}
+		}
+		return s
+	}
+	f.applyConfig = func(config []logicalConfig) error {
+		if config[0].Monitors[0].Connector == "Meta-0" {
+			f.current.logical = []logicalMonitor{{Scale: config[0].Scale, Primary: true, Monitors: []monitorSpec{virtual().Spec}}}
+			if resized {
+				if config[0].Monitors[0].Mode != "1920x1080" {
+					t.Error("reapplied the obsolete remote resolution")
+				}
+				select {
+				case <-repaired:
+				default:
+					close(repaired)
+				}
+			}
+		} else {
+			restoreAttempts++
+			if restoreAttempts == 1 {
+				return errors.New("The requested configuration is based on stale information")
+			}
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := withRemoteMonitor(ctx, f, io.Discard, func(connection context.Context) error {
+		select {
+		case <-f.applied:
+		case <-connection.Done():
+			return connection.Err()
+		}
+		f.mu.Lock()
+		resized = true
+		f.current = fixture()
+		f.mu.Unlock()
+		select {
+		case <-repaired:
+			return nil
+		case <-connection.Done():
+			return connection.Err()
+		}
+	})
+	if err != nil || restoreAttempts != 2 {
+		t.Fatalf("resize or disconnect restoration failed: attempts=%d error=%v", restoreAttempts, err)
+	}
+}
+
+func TestStaleRemoteConfigurationIsRetriedWithoutDisconnect(t *testing.T) {
+	f := &fakeDisplay{current: fixture(), applied: make(chan struct{})}
+	retried := make(chan struct{})
+	f.applyConfig = func(config []logicalConfig) error {
+		if len(f.configurations) == 1 {
+			return errors.New("The requested configuration is based on stale information")
+		}
+		if len(f.configurations) == 2 {
+			close(retried)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := withRemoteMonitor(ctx, f, io.Discard, func(connection context.Context) error {
+		select {
+		case <-retried:
+			return nil
+		case <-connection.Done():
+			return errors.New("stale monitor information disconnected the RDP stream")
+		}
+	})
+	if err != nil || len(f.configurations) != 3 {
+		t.Fatal("did not retry and restore after stale monitor information", err, f.configurations)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -116,7 +117,7 @@ func apply(ctx context.Context, object displayCaller, s state, config []logicalC
 
 func remoteMonitor(s, original state) (monitor, bool) {
 	for _, candidate := range s.monitors {
-		if candidate.Spec.Vendor != "Meta" || !strings.HasPrefix(candidate.Spec.Connector, "Meta-") {
+		if candidate.Spec.Vendor != "MetaVendor" || !strings.HasPrefix(candidate.Spec.Connector, "Meta-") {
 			continue
 		}
 		old := false
@@ -132,8 +133,11 @@ func remoteMonitor(s, original state) (monitor, bool) {
 
 func remoteConfig(remote monitor, scale float64) ([]logicalConfig, error) {
 	mode, ok := currentMode(remote)
+	if !ok && len(remote.Modes) == 1 {
+		mode, ok = remote.Modes[0], true
+	}
 	if !ok {
-		return nil, errors.New("GNOME remote monitor has no current mode")
+		return nil, errors.New("GNOME remote monitor has no available mode")
 	}
 	chosen := mode.PreferredScale
 	for _, supported := range mode.Scales {
@@ -208,14 +212,17 @@ func withRemoteMonitor(ctx context.Context, object displayCaller, log io.Writer,
 				}
 				continue
 			}
-			if changed {
-				continue
-			}
 			layout, err := remoteConfig(remote, scale)
 			if err == nil {
-				// Restore even if the compositor applies the change but the reply is lost.
+				current, _ := s.configuration()
 				changed = true
+				if reflect.DeepEqual(current, layout) {
+					continue
+				}
 				err = apply(connection, object, s, layout, s.properties)
+			}
+			if err != nil && strings.Contains(err.Error(), "based on stale information") {
+				continue
 			}
 			if err != nil {
 				done <- err
@@ -229,9 +236,17 @@ func withRemoteMonitor(ctx context.Context, object displayCaller, log io.Writer,
 	if changed {
 		restoreCtx, stop := context.WithTimeout(context.Background(), 4*time.Second)
 		defer stop()
-		s, restoreError := readState(restoreCtx, object)
-		if restoreError == nil {
-			restoreError = apply(restoreCtx, object, s, config, original.properties)
+		var restoreError error
+		// Removing the RDP monitor can invalidate a just-read compositor serial.
+		for attempt := 0; attempt < 3 && restoreCtx.Err() == nil; attempt++ {
+			s, readError := readState(restoreCtx, object)
+			restoreError = readError
+			if restoreError == nil {
+				restoreError = apply(restoreCtx, object, s, config, original.properties)
+			}
+			if restoreError == nil {
+				break
+			}
 		}
 		if restoreError != nil {
 			fmt.Fprintln(log, "Restore GNOME desktop:", restoreError)

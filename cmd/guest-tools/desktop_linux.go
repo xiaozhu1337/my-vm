@@ -28,7 +28,6 @@ func desktopStatus(ctx context.Context) guestops.Status {
 	status := guestops.Status{Protocol: guestops.ProtocolVersion, OS: "linux", Desktop: guestops.DesktopStatus{State: "unsupported", Reason: "session_unsupported"}}
 	status.Desktop.Mode = os.Getenv("XDG_SESSION_TYPE")
 	kind, _ := waylandDesktop(os.Getenv("XDG_CURRENT_DESKTOP"))
-	status.Desktop.DynamicResolution = status.Desktop.Mode == "wayland" && kind == "gnome"
 	if status.Desktop.Mode != "wayland" && status.Desktop.Mode != "x11" {
 		status.Desktop.Mode = ""
 		return status
@@ -62,6 +61,10 @@ func desktopStatus(ctx context.Context) guestops.Status {
 	}
 	if _, err = desktopAddress(ctx); err != nil {
 		return status
+	}
+	if kind == "gnome" {
+		sharing, err := exec.CommandContext(ctx, "gsettings", "get", "org.gnome.desktop.remote-desktop.rdp", "screen-share-mode").Output()
+		status.Desktop.DynamicResolution = err == nil && strings.TrimSpace(string(sharing)) == "'extend'"
 	}
 	status.Desktop.State, status.Desktop.Reason = "ready", "desktop_service_running"
 	return status

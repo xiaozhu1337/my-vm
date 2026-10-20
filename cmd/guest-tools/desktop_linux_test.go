@@ -23,16 +23,22 @@ func TestDesktopStatusProtocolSessionAndLock(t *testing.T) {
 	}{{"tty", "no", "unsupported", "session_unsupported", false}, {"x11", "yes", "ready", "desktop_service_running", false},
 		{"wayland", "yes", "waiting", "session_locked", true}, {"x11", "no", "ready", "desktop_service_running", false}, {"wayland", "no", "waiting", "desktop_bridge_stopped", false}, {"wayland", "no", "ready", "desktop_service_running", true}} {
 		t.Setenv("XDG_SESSION_TYPE", test.session)
-		for name, body := range map[string]string{"loginctl": "echo " + test.locked, "systemctl": "exit 0", "gdbus": "echo '(<uint16 3389>,)'"} {
+		for name, body := range map[string]string{"loginctl": "echo " + test.locked, "systemctl": "exit 0", "gdbus": "echo '(<uint16 3389>,)'", "gsettings": "echo \"'extend'\""} {
 			if err := os.WriteFile(filepath.Join(root, name), []byte("#!/bin/sh\n"+body+"\n"), 0700); err != nil {
 				t.Fatal(err)
 			}
 		}
 		desktopListening.Store(test.bridge)
 		status := desktopStatus(context.Background())
-		if status.Desktop.State != test.state || status.Desktop.Reason != test.reason || status.Desktop.DynamicResolution != (test.session == "wayland") || status.Validate() != nil {
+		if status.Desktop.State != test.state || status.Desktop.Reason != test.reason || status.Desktop.DynamicResolution != (test.session == "wayland" && test.state == "ready") || status.Validate() != nil {
 			t.Fatalf("unexpected desktop status: %+v", status)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "gsettings"), []byte("#!/bin/sh\necho \"'mirror-primary'\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if status := desktopStatus(context.Background()); status.Desktop.State != "ready" || status.Desktop.DynamicResolution {
+		t.Fatal("GNOME mirror mode advertised dynamic resolution", status)
 	}
 	t.Setenv("XDG_CURRENT_DESKTOP", "KDE")
 	if status := desktopStatus(context.Background()); status.Desktop.DynamicResolution {
