@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestWindowsEnhancedDoesNotDependOnGuestAgent(t *testing.T) {
@@ -65,6 +66,42 @@ func TestConsoleToolbarUsesStableMachineID(t *testing.T) {
 		if got := machineIDFromPipe(pipe); got != "" {
 			t.Fatalf("invalid identity accepted: %q", got)
 		}
+	}
+}
+
+func TestRendererFocusPreservesWindowOperations(t *testing.T) {
+	for _, test := range []struct {
+		name                       string
+		host, renderer, foreground uintptr
+		mouseDown                  bool
+		flags                      uint32
+		want                       bool
+	}{
+		{"keyboard return", 10, 20, 10, false, 0, true},
+		{"already inside guest", 10, 20, 20, false, 0, true},
+		{"title bar pressed before move loop", 10, 20, 10, true, 0, false},
+		{"drag starts after focus was queued", 10, 20, 10, true, 2, false},
+		{"keyboard move or resize", 10, 20, 10, false, 2, false},
+		{"menu stays open after mouse release", 10, 20, 10, false, 4, false},
+		{"system menu", 10, 20, 10, false, 8, false},
+		{"popup menu", 10, 20, 10, false, 16, false},
+		{"caret blinking", 10, 20, 10, false, 1, true},
+		{"user left before queued focus arrived", 10, 20, 30, false, 0, false},
+		{"authentication owns foreground", 10, 20, 40, false, 0, false},
+		{"no foreground", 10, 20, 0, false, 0, false},
+		{"host closed", 0, 20, 20, false, 0, false},
+		{"renderer not ready", 10, 0, 10, false, 0, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := rendererFocusAllowed(test.host, test.renderer, test.foreground, test.mouseDown, test.flags); got != test.want {
+				t.Fatalf("focus transfer allowed=%v want=%v", got, test.want)
+			}
+		})
+	}
+	// Win32 GUITHREADINFO has two DWORDs, six HWNDs, and a RECT.
+	info := guiThreadInfo{}
+	if unsafe.Sizeof(info) != 24+6*unsafe.Sizeof(uintptr(0)) || unsafe.Offsetof(info.caretRect) != 8+6*unsafe.Sizeof(uintptr(0)) {
+		t.Fatal("GetGUIThreadInfo ABI does not match Win32")
 	}
 }
 

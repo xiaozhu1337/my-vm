@@ -165,6 +165,9 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 		// DefWindowProc must still deliver WM_MOVE/WM_SIZE and activation handling.
 		if v != nil && v.host != nil {
 			v.resizeRenderer()
+			if msg == 0x6 && wparam == 1 { // WA_ACTIVE, not mouse activation or minimization.
+				v.focusRenderer()
+			}
 		}
 	case 3, 5, 0x18, 0x113:
 		if v != nil && v.hwnd != 0 {
@@ -176,9 +179,8 @@ var procedure = syscall.NewCallback(func(hwnd uintptr, msg uint32, wparam, lpara
 		}
 		return 0
 	case 0x7:
-		if v != nil && v.host != nil && v.host.Active != nil {
-			v.focusRenderer()
-		} else if v != nil && v.child != 0 {
+		// Mouse activation must leave the host free to drag its title bar or resize its frame.
+		if v != nil && v.child != 0 {
 			user32.NewProc("SetFocus").Call(v.child)
 		}
 		return 0

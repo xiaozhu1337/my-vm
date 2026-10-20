@@ -466,9 +466,43 @@ func (v *viewer) pollRenderer() {
 	}
 }
 
+type guiThreadInfo struct {
+	size, flags                                   uint32
+	active, focus, capture, menu, moveSize, caret uintptr
+	caretRect                                     [4]int32
+}
+
+func rendererFocusAllowed(host, renderer, foreground uintptr, mouseDown bool, guiFlags uint32) bool {
+	return host != 0 && renderer != 0 && (foreground == host || foreground == renderer) && !mouseDown && guiFlags&0x1e == 0
+}
+
+func rendererCanFocus(host, renderer uintptr) bool {
+	if host == 0 || renderer == 0 {
+		return false
+	}
+	thread, _, _ := user32.NewProc("GetWindowThreadProcessId").Call(host, 0)
+	if thread == 0 {
+		return false
+	}
+	info := guiThreadInfo{size: uint32(unsafe.Sizeof(guiThreadInfo{}))}
+	if ok, _, _ := user32.NewProc("GetGUIThreadInfo").Call(thread, uintptr(unsafe.Pointer(&info))); ok == 0 {
+		return false
+	}
+	mouseDown := false
+	for _, key := range []uintptr{1, 2, 4, 5, 6} {
+		state, _, _ := user32.NewProc("GetAsyncKeyState").Call(key)
+		mouseDown = mouseDown || state&0x8000 != 0
+	}
+	foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
+	// Check both before sending and after receiving: the user may start dragging or leave this pair in between.
+	return rendererFocusAllowed(host, renderer, foreground, mouseDown, info.flags)
+}
+
 func (v *viewer) focusRenderer() {
-	if v.host != nil && v.host.Active != nil {
-		user32.NewProc("AllowSetForegroundWindow").Call(uintptr(v.host.Active.PID))
+	if v.closed || v.host == nil || v.host.Active == nil || !rendererCanFocus(v.hwnd, uintptr(v.host.Active.Window)) {
+		return
+	}
+	if allowed, _, _ := user32.NewProc("AllowSetForegroundWindow").Call(uintptr(v.host.Active.PID)); allowed != 0 {
 		v.host.Active.Send("focus")
 	}
 }
@@ -654,8 +688,14 @@ func (v *viewer) rendererCommands() {
 				v.fail(err)
 			}
 		case "focus":
-			user32.NewProc("SetForegroundWindow").Call(v.hwnd)
-			user32.NewProc("SetFocus").Call(v.child)
+			if !v.validParent() || !rendererCanFocus(v.parent, v.hwnd) {
+				continue
+			}
+			if ok, _, _ := user32.NewProc("SetForegroundWindow").Call(v.hwnd); ok != 0 {
+				if foreground, _, _ := user32.NewProc("GetForegroundWindow").Call(); foreground == v.hwnd {
+					user32.NewProc("SetFocus").Call(v.child)
+				}
+			}
 		case "forget":
 			v.forgetLogin()
 		}
