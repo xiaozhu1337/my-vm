@@ -16,6 +16,7 @@ import (
 	"my-vm/internal/console/renderhost"
 
 	ole "github.com/go-ole/go-ole"
+	"github.com/go-ole/go-ole/oleutil"
 )
 
 func TestDismissHeaderReclaimsSpaceAndStaysHidden(t *testing.T) {
@@ -325,6 +326,73 @@ func TestNativeDisplayUpdateBeforeConnect(t *testing.T) {
 		t.Fatalf("native display HRESULT was not retained: %v", err)
 	}
 	t.Logf("native display update before Connect: %v", err)
+}
+
+func TestNativeInputModePolicy(t *testing.T) {
+	if os.Getenv("MY_VM_INTEGRATION") != "1" {
+		t.Skip("set MY_VM_INTEGRATION=1 to check native RDP mouse settings without a guest")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		t.Fatal(err)
+	}
+	defer ole.CoUninitialize()
+	object, err := ole.CreateInstance(ole.NewGUID("{A0C63C30-F08D-4AB4-907C-34905D770C7D}"), ole.IID_IUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer object.Release()
+	client, err := object.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Release()
+	advanced, err := property(client, "AdvancedSettings9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer advanced.Release()
+	var settings *ole.IUnknown
+	if err := client.PutQueryInterface(ole.NewGUID("{302D8188-0052-4807-806A-362B628F9AC5}"), &settings); err != nil {
+		t.Fatal(err)
+	}
+	defer settings.Release()
+	label := ole.SysAllocString("AllowRelativeMouseMode")
+	defer ole.SysFreeString(label)
+	for _, test := range []struct {
+		name              string
+		enhanced, wayland bool
+	}{
+		{"Linux enhanced", true, true},
+		{"Windows basic", false, false},
+		{"Windows enhanced", true, false},
+	} {
+		// Reproduce the old unconditional opt-in before applying the input policy.
+		if err := extended(client, "AllowRelativeMouseMode", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
+			t.Fatal(test.name, err)
+		}
+		v := &viewer{client: client, advanced: advanced, enhanced: test.enhanced, wayland: test.wayland}
+		if err := v.configureInput(); err != nil {
+			t.Fatal(test.name, err)
+		}
+		value := ole.VARIANT{}
+		if err := call(settings, 4, uintptr(unsafe.Pointer(label)), uintptr(unsafe.Pointer(&value))); err != nil {
+			t.Fatal(test.name, err)
+		}
+		if value.VT != ole.VT_BOOL || (value.Val != 0) != !test.wayland {
+			t.Fatalf("%s: relative mouse opt-in=%+v, want %v", test.name, value, !test.wayland)
+		}
+		_ = value.Clear()
+		mode, err := oleutil.GetProperty(advanced, "RelativeMouseMode")
+		if err != nil {
+			t.Fatal(test.name, err)
+		}
+		defer mode.Clear()
+		if (mode.Val != 0) != !test.wayland {
+			t.Fatalf("%s: relative mouse mode=%v, want %v", test.name, mode.Val, !test.wayland)
+		}
+	}
 }
 
 func TestDisplayResizeDebounceAndFailedUpdateRetry(t *testing.T) {

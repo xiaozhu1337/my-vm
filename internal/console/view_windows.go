@@ -456,9 +456,15 @@ func Run(args []string, log io.Writer) error {
 		}
 	}
 	user32.NewProc("SetTimer").Call(v.hwnd, 1, 300, 0)
+	getMessage := user32.NewProc("GetMessageW")
+	isChild := user32.NewProc("IsChild")
+	sendMessage := user32.NewProc("SendMessageW")
+	isDialogMessage := user32.NewProc("IsDialogMessageW")
+	translateMessage := user32.NewProc("TranslateMessage")
+	dispatchMessage := user32.NewProc("DispatchMessageW")
 	var msg message
 	for {
-		ok, _, _ := user32.NewProc("GetMessageW").Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
+		ok, _, _ := getMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
 		if int32(ok) == -1 {
 			return fmt.Errorf("控制台消息循环失败")
 		}
@@ -470,10 +476,10 @@ func Run(args []string, log io.Writer) error {
 		}
 		guestInput := uintptr(0)
 		if v.rendererMode {
-			guestInput, _, _ = user32.NewProc("IsChild").Call(v.child, msg.Window)
+			guestInput, _, _ = isChild.Call(v.child, msg.Window)
 		}
 		if v.rendererMode && (msg.Window == v.child || guestInput != 0) && ((msg.Message >= 0x100 && msg.Message <= 0x109) || (msg.Message >= 0x200 && msg.Message <= 0x20e)) {
-			handled, _, _ := user32.NewProc("SendMessageW").Call(v.child, 0x37f, 0, uintptr(unsafe.Pointer(&msg)))
+			handled, _, _ := sendMessage.Call(v.child, 0x37f, 0, uintptr(unsafe.Pointer(&msg)))
 			if handled != 0 {
 				continue
 			}
@@ -482,13 +488,13 @@ func Run(args []string, log io.Writer) error {
 			continue
 		}
 		if v.host == nil && guestInput == 0 && msg.Window != v.child && msg.Message >= 0x100 && msg.Message <= 0x109 {
-			handled, _, _ := user32.NewProc("IsDialogMessageW").Call(v.hwnd, uintptr(unsafe.Pointer(&msg)))
+			handled, _, _ := isDialogMessage.Call(v.hwnd, uintptr(unsafe.Pointer(&msg)))
 			if handled != 0 {
 				continue
 			}
 		}
-		user32.NewProc("TranslateMessage").Call(uintptr(unsafe.Pointer(&msg)))
-		user32.NewProc("DispatchMessageW").Call(uintptr(unsafe.Pointer(&msg)))
+		translateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+		dispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))
 	}
 	return nil
 }
@@ -531,7 +537,7 @@ func (v *viewer) initialize() error {
 	for _, setting := range []struct {
 		name  string
 		value any
-	}{{"RelativeMouseMode", !v.wayland}, {"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.enhanced && v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", !v.wayland || !v.dynamicResolution}} {
+	}{{"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.enhanced && v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", !v.wayland || !v.dynamicResolution}} {
 		if err = put(v.advanced, setting.name, setting.value); err != nil {
 			return err
 		}
@@ -599,7 +605,6 @@ func (v *viewer) initialize() error {
 	if err = v.configureClipboard(); err != nil {
 		return err
 	}
-	_ = extended(v.client, "AllowRelativeMouseMode", ole.VARIANT{VT: ole.VT_BOOL, Val: -1})
 	v.resize()
 	if v.wayland {
 		result, err := oleutil.CallMethod(v.client, "Connect")

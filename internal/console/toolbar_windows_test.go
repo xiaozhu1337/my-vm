@@ -132,6 +132,13 @@ func TestPointerChoosesGuestOnlyOverItsImage(t *testing.T) {
 	}
 }
 
+func BenchmarkCursorRoot(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		cursorRoot()
+	}
+}
+
 func TestRendererFocusPreservesWindowOperations(t *testing.T) {
 	for _, test := range []struct {
 		name                       string

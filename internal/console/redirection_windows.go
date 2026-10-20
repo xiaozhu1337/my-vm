@@ -9,12 +9,26 @@ import (
 )
 
 func (v *viewer) configureInput() error {
+	if err := put(v.advanced, "RelativeMouseMode", !v.wayland); err != nil {
+		return err
+	}
 	secured, err := property(v.client, "SecuredSettings3")
 	if err != nil {
 		return err
 	}
 	defer secured.Release()
-	return put(secured, "KeyboardHookMode", 1)
+	if err := put(secured, "KeyboardHookMode", 1); err != nil {
+		return err
+	}
+	allow := ole.VARIANT{VT: ole.VT_BOOL, Val: -1}
+	if v.wayland {
+		// Absolute desktop input must not be overridden by relative mouse negotiation.
+		allow.Val = 0
+	}
+	if err := extended(v.client, "AllowRelativeMouseMode", allow); err != nil && v.wayland {
+		return fmt.Errorf("关闭 Linux 相对鼠标模式: %w", err)
+	}
+	return nil
 }
 
 type guiThreadInfo struct {
@@ -34,14 +48,20 @@ func pointerFocusTarget(host, renderer, foreground, pointerRoot uintptr) uintptr
 	return 0
 }
 
+var (
+	getCursorPosProc    = user32.NewProc("GetCursorPos")
+	windowFromPointProc = user32.NewProc("WindowFromPoint")
+	getAncestorProc     = user32.NewProc("GetAncestor")
+)
+
 func cursorRoot() uintptr {
 	var point [2]int32
-	if ok, _, _ := user32.NewProc("GetCursorPos").Call(uintptr(unsafe.Pointer(&point))); ok == 0 {
+	if ok, _, _ := getCursorPosProc.Call(uintptr(unsafe.Pointer(&point))); ok == 0 {
 		return 0
 	}
 	packed := uintptr(uint64(uint32(point[0])) | uint64(uint32(point[1]))<<32)
-	hit, _, _ := user32.NewProc("WindowFromPoint").Call(packed)
-	root, _, _ := user32.NewProc("GetAncestor").Call(hit, 2)
+	hit, _, _ := windowFromPointProc.Call(packed)
+	root, _, _ := getAncestorProc.Call(hit, 2)
 	return root
 }
 
@@ -104,7 +124,7 @@ func (v *viewer) focusRenderer() {
 
 func (v *viewer) releaseGuestFocus() {
 	foreground, _, _ := user32.NewProc("GetForegroundWindow").Call()
-	if v.rendererMode && !v.closed && v.validParent() && foreground == v.hwnd && inputHandoverIdle(v.parent, v.hwnd) && cursorRoot() == v.parent {
+	if v.rendererMode && !v.closed && v.validParent() && foreground == v.hwnd && cursorRoot() == v.parent && inputHandoverIdle(v.parent, v.hwnd) && cursorRoot() == v.parent {
 		user32.NewProc("SetForegroundWindow").Call(v.parent)
 	}
 }
