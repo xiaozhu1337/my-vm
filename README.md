@@ -19,7 +19,11 @@ A native Windows virtual machine manager for Windows and Linux guests, built on 
 
 ## Screenshots
 
-The images below are rendered from the application's actual interface using example VM configurations and snapshot data. The current application UI is in Simplified Chinese.
+The first screenshot shows Windows and Ubuntu running side by side in enhanced sessions. The management views below use example VM configurations and snapshot data. The current application UI is in Simplified Chinese.
+
+**Windows and Ubuntu enhanced sessions**
+
+![Windows and Ubuntu running side by side in enhanced sessions](assets/screenshots/enhanced-sessions.png)
 
 **VM library and hardware overview**
 

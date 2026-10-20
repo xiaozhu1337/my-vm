@@ -19,7 +19,11 @@
 
 ## 界面截图
 
-以下图片由应用的真实界面渲染，使用示例虚拟机配置与快照数据。当前应用界面为简体中文。
+首图展示 Windows 与 Ubuntu 同时运行的真实增强会话，后面的管理界面使用示例虚拟机配置与快照数据。当前应用界面为简体中文。
+
+**Windows 与 Ubuntu 增强会话**
+
+![Windows 与 Ubuntu 同时运行的增强会话](assets/screenshots/enhanced-sessions.png)
 
 **虚拟机库与硬件概览**
 

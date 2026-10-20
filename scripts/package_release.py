@@ -39,7 +39,8 @@ def package():
             raise ValueError('Missing release artifact: ' + name)
         files[name] = path
     for name in ('README.md', 'README.zh-CN.md', 'assets/my-vm.png', 'assets/screenshots/overview.png',
-                 'assets/screenshots/snapshots.png', 'assets/screenshots/devices.png'):
+                 'assets/screenshots/snapshots.png', 'assets/screenshots/devices.png',
+                 'assets/screenshots/enhanced-sessions.png'):
         files[name] = ROOT / name
     for platform in ('windows', 'linux'):
         source = DIST / ('my-vm-guest-tools-' + platform + '.iso')
