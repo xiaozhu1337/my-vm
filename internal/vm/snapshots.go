@@ -172,6 +172,9 @@ func (m *Manager) SnapshotContext(ctx context.Context, machine Machine, action, 
 }
 
 func (m *Manager) createSnapshot(ctx context.Context, machine Machine, storage *checkpoint.Store, name string, progress func(int64, int64)) error {
+	if err := storage.CheckFork(storage.Active); err != nil {
+		return err
+	}
 	if err := storage.CheckFiles(storage.Chain()...); err != nil {
 		return err
 	}
@@ -227,6 +230,9 @@ func (m *Manager) createSnapshot(ctx context.Context, machine Machine, storage *
 }
 
 func (m *Manager) restoreSnapshot(ctx context.Context, machine Machine, storage *checkpoint.Store, entry checkpoint.Entry, progress func(int64, int64)) error {
+	if err := storage.CheckFork(entry.Disk); err != nil {
+		return err
+	}
 	if err := storage.CheckFiles(entry.Disk); err != nil {
 		return err
 	}

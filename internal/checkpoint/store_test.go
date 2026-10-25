@@ -1,11 +1,52 @@
 package checkpoint
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDeepCatalogValidationAndForkLimit(t *testing.T) {
+	s := &Store{Version: 1, Active: "disk.vhdx", Layers: map[string]string{"disk.vhdx": ""}}
+	parent, entryParent := s.Active, ""
+	for i := range 10000 {
+		disk := fmt.Sprintf("disk-%032x.vhdx", i+1)
+		id := fmt.Sprintf("%032x", i+1)
+		s.Layers[disk] = parent
+		s.Entries = append(s.Entries, Entry{ID: id, Name: fmt.Sprintf("snapshot_%d", i), Disk: parent, Parent: entryParent})
+		parent, entryParent = disk, id
+	}
+	s.Active, s.Current = parent, entryParent
+	if err := s.Validate(); err != nil {
+		t.Fatal("existing deep catalog must remain recoverable", err)
+	}
+	if len(s.Tree()) != len(s.Entries) {
+		t.Fatal("deep tree lost entries")
+	}
+	if err := s.CheckFork(s.Active); err == nil {
+		t.Fatal("hidden ancestry bypassed fork limit")
+	}
+	if err := s.CheckFork("disk.vhdx"); err != nil {
+		t.Fatal("independent branch rejected", err)
+	}
+	if err := s.CheckFork(fmt.Sprintf("disk-%032x.vhdx", 62)); err != nil {
+		t.Fatal("fork producing the 64th layer rejected", err)
+	}
+	if err := s.CheckFork(fmt.Sprintf("disk-%032x.vhdx", 63)); err == nil {
+		t.Fatal("fork producing a 65th layer accepted")
+	}
+	s.Entries[0].Disk = s.Active
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "只读恢复点") {
+		t.Fatal("writable recovery point accepted", err)
+	}
+	s.Entries[0].Disk = "disk.vhdx"
+	s.Layers["disk.vhdx"] = s.Active
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "循环") {
+		t.Fatal("disk cycle accepted", err)
+	}
+}
 
 func TestBranchDeletionKeepsSharedAncestorsAndCollectsAbandonedLeaves(t *testing.T) {
 	s, err := Load(t.TempDir())

@@ -157,42 +157,37 @@ func (s *Store) Validate() error {
 			return errors.New("当前快照节点不存在")
 		}
 	}
-	for _, e := range s.Entries {
-		seen := map[string]bool{}
-		for id := e.ID; id != ""; {
-			if seen[id] {
-				return errors.New("快照树存在循环")
-			}
-			seen[id] = true
-			node, ok := entries[id]
-			if !ok {
-				return errors.New("快照树缺少父节点")
-			}
-			id = node.Parent
-		}
+	parents := make(map[string]string, len(entries))
+	for id, entry := range entries {
+		parents[id] = entry.Parent
 	}
+	if err := validateLinks(parents, "快照树"); err != nil {
+		return err
+	}
+	children := make(map[string][]string, len(s.Layers))
 	for disk, parent := range s.Layers {
 		if !safeFile(disk) || parent != "" && !safeFile(parent) {
 			return errors.New("磁盘链包含无效路径")
 		}
-		seen := map[string]bool{}
-		for node := disk; node != ""; {
-			if seen[node] {
-				return errors.New("磁盘链存在循环")
-			}
-			seen[node] = true
-			next, ok := s.Layers[node]
-			if !ok {
-				return errors.New("磁盘链缺少父节点")
-			}
-			node = next
+		children[parent] = append(children[parent], disk)
+	}
+	if err := validateLinks(s.Layers, "磁盘链"); err != nil {
+		return err
+	}
+	// Every descendant of the writable disk is unsafe as a recovery point.
+	writable := map[string]bool{s.Active: true}
+	pending := []string{s.Active}
+	for len(pending) > 0 {
+		disk := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for _, child := range children[disk] {
+			writable[child] = true
+			pending = append(pending, child)
 		}
 	}
 	for _, e := range s.Entries {
-		for disk := e.Disk; disk != ""; disk = s.Layers[disk] {
-			if disk == s.Active {
-				return errors.New("活动磁盘仍被快照引用，拒绝写入只读恢复点")
-			}
+		if writable[e.Disk] {
+			return errors.New("活动磁盘仍被快照引用，拒绝写入只读恢复点")
 		}
 	}
 	if s.Pending != nil {
@@ -223,6 +218,44 @@ func (s *Store) Validate() error {
 	}
 	return nil
 }
+func validateLinks(parents map[string]string, label string) error {
+	visited := make(map[string]uint8, len(parents))
+	for start := range parents {
+		node := start
+		for node != "" && visited[node] == 0 {
+			parent, ok := parents[node]
+			if !ok {
+				return errors.New(label + "缺少父节点")
+			}
+			visited[node] = 1
+			node = parent
+		}
+		if node != "" && visited[node] == 1 {
+			return errors.New(label + "存在循环")
+		}
+		for node = start; node != "" && visited[node] == 1; node = parents[node] {
+			visited[node] = 2
+		}
+	}
+	return nil
+}
+
+// CheckFork limits actual VHDX ancestry, including hidden parents of deleted snapshots.
+func (s *Store) CheckFork(parent string) error {
+	const maxDepth = 64
+	for depth := 0; parent != ""; depth++ {
+		if depth >= maxDepth-1 {
+			return errors.New("磁盘差分链已达 64 层，不能继续分叉；请克隆为独立磁盘")
+		}
+		next, ok := s.Layers[parent]
+		if !ok {
+			return errors.New("磁盘链缺少父节点")
+		}
+		parent = next
+	}
+	return nil
+}
+
 func (s *Store) validateEntry(e Entry) error {
 	if !validNode.MatchString(e.ID) && !validName.MatchString(e.ID) {
 		return errors.New("快照 ID 无效")
@@ -243,17 +276,22 @@ func (s *Store) Find(name string) (Entry, bool) {
 func (s *Store) Tree() []Entry {
 	entries := append([]Entry(nil), s.Entries...)
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Created < entries[j].Created })
+	children := make(map[string][]Entry, len(entries))
+	for _, entry := range entries {
+		children[entry.Parent] = append(children[entry.Parent], entry)
+	}
 	var result []Entry
-	var visit func(string)
-	visit = func(parent string) {
-		for _, e := range entries {
-			if e.Parent == parent {
-				result = append(result, e)
-				visit(e.ID)
-			}
+	stack := append([]Entry(nil), children[""]...)
+	slices.Reverse(stack)
+	for len(stack) > 0 {
+		entry := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		result = append(result, entry)
+		next := children[entry.ID]
+		for i := len(next) - 1; i >= 0; i-- {
+			stack = append(stack, next[i])
 		}
 	}
-	visit("")
 	return result
 }
 func (s *Store) Remove(id string) {
