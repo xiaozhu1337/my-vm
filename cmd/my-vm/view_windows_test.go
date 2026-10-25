@@ -348,43 +348,33 @@ func TestMachineMenuSnapshotNavigationAndKeyboard(t *testing.T) {
 func TestMachineMenuStateRestrictions(t *testing.T) {
 	for _, test := range []struct {
 		name, state, backend string
-		dynamic              bool
 		blocked              []string
 	}{
-		{"off", "已关机", "hcs", true, []string{"打开画面", "暂停", "正常关机", "调整运行内存", "基础控制台（安装与维护）", "强制断电"}},
-		{"running", "运行中", "hcs", true, []string{"启动虚拟机", "编辑配置", "复制虚拟机", "从列表移除"}},
-		{"paused", "已暂停", "hcs", true, []string{"启动虚拟机", "正常关机", "编辑配置", "复制虚拟机", "安装增强能力", "调整运行内存"}},
-		{"fixed-memory", "运行中", "hcs", false, []string{"调整运行内存"}},
-		{"legacy", "已关机", "qemu", false, []string{"启动虚拟机", "打开画面", "复制虚拟机", "安装增强能力", "管理快照", "调整运行内存"}},
+		{"off", "已关机", "hcs", []string{"打开画面", "暂停", "正常关机", "基础控制台（安装与维护）", "强制断电"}},
+		{"running", "运行中", "hcs", []string{"启动虚拟机", "编辑配置", "复制虚拟机", "从列表移除"}},
+		{"paused", "已暂停", "hcs", []string{"启动虚拟机", "正常关机", "编辑配置", "复制虚拟机", "安装增强能力"}},
+		{"legacy", "已关机", "qemu", []string{"启动虚拟机", "打开画面", "复制虚拟机", "安装增强能力", "管理快照"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			a := testApplication(t, 1)
 			m := a.config.Machines[0]
-			m.Backend, m.DynamicMemory = test.backend, test.dynamic
+			m.Backend = test.backend
 			tt := ui.NewTester(func(c *ui.Context) {
 				ui.Box(c).Label("target").Fill().ContextMenu(func(menu *ui.Menu) { a.machineMenu(menu, m, test.state) })
 			}, 700, 400)
 			for _, label := range test.blocked {
 				blockedMachineAction(t, tt, "target", label)
 			}
+			if err := tt.RightClick("target"); err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(tt.Menu(), "调整运行内存") {
+				t.Fatal("retired runtime memory menu is still present")
+			}
 			if a.manager.Active() || len(a.operations) != 0 || a.page != "" {
 				t.Fatal("disabled menu item started an operation")
 			}
 		})
-	}
-}
-
-func TestMachineMenuOpensMemoryPageForTarget(t *testing.T) {
-	a := testApplication(t, 2)
-	m := a.config.Machines[1]
-	m.DynamicMemory = true
-	a.runtimeMemoryID = a.selected
-	tt := ui.NewTester(func(c *ui.Context) {
-		ui.Box(c).Label("target").Fill().ContextMenu(func(menu *ui.Menu) { a.machineMenu(menu, m, "运行中") })
-	}, 700, 400)
-	chooseMachineAction(t, tt, "target", "调整运行内存")
-	if a.selected != m.ID || a.page != "memory" || a.runtimeMemoryID != "" {
-		t.Fatal("memory menu did not select its target and reset the previous input")
 	}
 }
 

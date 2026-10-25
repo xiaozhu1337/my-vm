@@ -70,7 +70,7 @@ func TestSnapshotResultsBelongToMachineAndRequest(t *testing.T) {
 }
 
 func TestMachineOperationAllowsNavigationAndOtherOperations(t *testing.T) {
-	for _, label := range []string{"启动虚拟机", "暂停虚拟机", "打开增强会话", "调整运行内存", "读取快照", "插入增强光盘", "保存虚拟机"} {
+	for _, label := range []string{"启动虚拟机", "暂停虚拟机", "打开增强会话", "创建快照", "读取快照", "插入增强光盘", "保存虚拟机"} {
 		t.Run(label, func(t *testing.T) {
 			a := testApplication(t, 2)
 			first, second := a.config.Machines[0], a.config.Machines[1]

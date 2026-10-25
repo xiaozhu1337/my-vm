@@ -23,8 +23,6 @@ func (a *application) view(c *ui.Context) {
 				switch a.page {
 				case "settings":
 					a.settings(c)
-				case "memory":
-					a.memoryPage(c)
 				case "edit":
 					ui.Column(c).Disabled(a.diskBusy(a.draft.ID)).Fill().Children(func() { a.editor(c) })
 				default:

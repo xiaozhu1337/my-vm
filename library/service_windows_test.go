@@ -42,6 +42,35 @@ type localTransport func(*http.Request) (*http.Response, error)
 
 func (f localTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestPublicFixedMemoryWorkflow(t *testing.T) {
+	_, client := fixture(t, 1)
+	ctx := context.Background()
+	cfg, err := client.Configuration(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine := cfg.Machines[0]
+	if _, err = client.Execute(ctx, Request{Action: "memory-set", VM: machine.ID}); err == nil {
+		t.Fatal("retired memory adjustment action was accepted")
+	}
+	data, err := client.Execute(ctx, Request{Action: "memory", VM: machine.ID})
+	if err != nil || string(data) != "0" {
+		t.Fatal("stopped memory query changed", string(data), err)
+	}
+	machine.MemoryMiB = 8192
+	data, err = client.Execute(ctx, Request{Action: "update", VM: machine.ID, Machine: &machine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updated Machine
+	if err = json.Unmarshal(data, &updated); err != nil || updated.MemoryMiB != 8192 {
+		t.Fatal("fixed memory edit failed", updated, err)
+	}
+	if bytes.Contains(data, []byte("dynamic_memory")) || bytes.Contains(data, []byte("max_memory_mib")) {
+		t.Fatal("retired fields leaked through the public API", string(data))
+	}
+}
+
 func TestPublicClientConfigurationAndPagination(t *testing.T) {
 	_, client := fixture(t, 105)
 	ctx := context.Background()
@@ -144,7 +173,7 @@ func TestServiceLocksDoNotBlockOtherMachinesOrStatus(t *testing.T) {
 	if _, err = client.Execute(ctx, Request{Action: "list"}); err != nil {
 		t.Fatal("long job blocked state", err)
 	}
-	if _, err = client.Execute(ctx, Request{Action: "memory-set", VM: second.ID, Size: 4096}); err == nil || errors.Is(err, context.DeadlineExceeded) {
+	if _, err = client.Execute(ctx, Request{Action: "pause", VM: second.ID}); err == nil || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("unrelated VM was blocked", err)
 	}
 	if _, err = client.Execute(ctx, Request{Action: "remove", VM: first.ID}); err == nil {

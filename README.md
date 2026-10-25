@@ -65,7 +65,7 @@ Extract the complete archive into a writable folder, keep the enhancement ISOs n
 
 ### First VM
 
-1. Create a VM, select a Windows or Linux installation ISO, and assign CPU, default and maximum memory, disk, and networking.
+1. Create a VM, select a Windows or Linux installation ISO, and assign CPU, fixed memory, disk, and networking.
 2. Right-click the VM to start it and open the basic console. Install the operating system normally.
 3. Choose **Install enhancements** from the VM's context menu to attach the appropriate guest-tools disc.
 4. In Windows, run `install.exe` from the disc as the logged-in desktop user and approve elevation. Windows enhanced sessions require a guest edition with an RDP server and an account with a login password.
@@ -82,7 +82,7 @@ Closing a console leaves its VM running. Closing the manager offers a normal shu
 
 ## How is memory allocated?
 
-Default memory is used at the next boot. Maximum memory caps manual runtime changes; both can be set during creation or editing while powered off. Enabling memory reclamation and hot changes uses HCS deferred commitment and guest free-page reporting to release physical backing, and permits manual capacity changes. This is not the Hyper-V Manager policy that automatically grows and shrinks guest capacity between minimum and maximum values under pressure. Reclamation depends on guest support; the UI reports configured capacity, not current physical usage.
+Each VM has one fixed memory capacity (`memory_mib`), set at creation or edited while powered off. It stays fixed while the VM is running. Existing configurations retain their `memory_mib` value; retired dynamic-memory and maximum-memory fields are ignored on import and omitted on save. Runtime snapshots require the same memory capacity as the current configuration. Saved running or paused states created with the retired dynamic-memory backing cannot be restored; their disks remain available for cloning and a fresh boot.
 
 ## Snapshots: what is saved?
 
@@ -114,7 +114,7 @@ my-vm-cli.exe copy-to "Ubuntu Desktop" "C:\Work\hello.txt" /home/user/hello.txt
 my-vm-cli.exe --help
 ```
 
-Guest commands and file transfer require installed, running guest tools. Snapshots and ordinary VM control use the host backend. The CLI also covers configuration, cloning, runtime memory, enhancement media, networks, and global settings. See the [CLI reference](docs/command-line.md) and [library architecture](docs/architecture.md).
+Guest commands and file transfer require installed, running guest tools. Snapshots and ordinary VM control use the host backend. The CLI also covers configuration, cloning, memory queries, enhancement media, networks, and global settings. See the [CLI reference](docs/command-line.md) and [library architecture](docs/architecture.md).
 
 ## Build from source
 

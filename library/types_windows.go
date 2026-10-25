@@ -45,7 +45,6 @@ type Request struct {
 	CIDR       string   `json:"cidr,omitempty"`
 	Path       string   `json:"path,omitempty"`
 	Mode       string   `json:"mode,omitempty"`
-	Size       int      `json:"size,omitempty"`
 	Enabled    *bool    `json:"enabled,omitempty"`
 	Offset     int      `json:"offset,omitempty"`
 	Limit      int      `json:"limit,omitempty"`

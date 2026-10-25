@@ -69,7 +69,7 @@ func (m *Manager) CloneFrom(source, target Machine, snapshot string, progress fu
 	if m.State(source.ID) != "已关机" || m.State(target.ID) != "已关机" {
 		return errors.New("请先关闭虚拟机，再复制磁盘")
 	}
-	storage, err := m.storage(source)
+	storage, err := m.snapshotSource(source)
 	if err != nil {
 		return err
 	}

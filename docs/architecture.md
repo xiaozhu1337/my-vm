@@ -49,7 +49,7 @@ func (c *Client) Close()
 | `create`, `update`, `clone`, `remove` | 同名命令 | 创建、编辑、独立复制、移除登记 |
 | `start`, `stop`, `kill`, `pause`, `resume`, `shutdown-all` | 同名命令 | 完整生命周期 |
 | `snapshots`, `snapshot-create`, `snapshot-restore`, `snapshot-delete` | `snapshot list/create/restore/delete` | 分支快照 |
-| `memory`, `memory-set` | `memory`, `memory set` | 运行内存查询和调整 |
+| `memory` | `memory` | 运行会话的固定内存查询；内存容量通过关机 `update` 设置 |
 | `enhancements`, `media-mount` | `enhancements`, `media mount` | 驱动收集、介质准备及挂载 |
 | `networks`, `network-create`, `network-delete`, `adapters` | `network list/create/delete`, `adapters` | NAT 与宿主网络 |
 | `settings`, `settings-update` | `settings`, `settings set` | 全局缓解配置 |

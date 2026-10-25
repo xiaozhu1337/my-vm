@@ -21,7 +21,6 @@ import (
 type Machine struct {
 	GuestOS         string           `yaml:"guest_os" json:"guest_os"`
 	LinuxDesktop    string           `yaml:"linux_desktop,omitempty" json:"linux_desktop,omitempty"`
-	DynamicMemory   bool             `yaml:"dynamic_memory" json:"dynamic_memory"`
 	GPUShared       bool             `yaml:"gpu_shared" json:"gpu_shared"`
 	Backend         string           `yaml:"backend" json:"backend"`
 	SwitchID        string           `yaml:"switch_id" json:"switch_id"`
@@ -31,7 +30,6 @@ type Machine struct {
 	Name            string           `yaml:"name" json:"name"`
 	CPUs            int              `yaml:"cpus" json:"cpus"`
 	MemoryMiB       int              `yaml:"memory_mib" json:"memory_mib"`
-	MaxMemoryMiB    int              `yaml:"max_memory_mib" json:"max_memory_mib"`
 	DiskGiB         int              `yaml:"disk_gib" json:"disk_gib"`
 	ISO             string           `yaml:"iso" json:"iso"`
 	DriverISO       string           `yaml:"driver_iso" json:"driver_iso"`
@@ -41,6 +39,39 @@ type Machine struct {
 	NetworkAdapters []NetworkAdapter `yaml:"network_adapters,omitempty" json:"network_adapters,omitempty"`
 	COMPorts        []COMPort        `yaml:"com_ports,omitempty" json:"com_ports,omitempty"`
 	Accelerator     string           `yaml:"accelerator" json:"accelerator"`
+}
+
+func (m *Machine) UnmarshalYAML(node *yaml.Node) error {
+	type machine Machine
+	value := struct {
+		*machine `yaml:",inline"`
+		// Accept retired fields from existing configurations without retaining them.
+		DynamicMemory bool `yaml:"dynamic_memory"`
+		MaxMemoryMiB  int  `yaml:"max_memory_mib"`
+	}{machine: (*machine)(m)}
+	// Validate aliases before expanding them for the strict standalone decoder.
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	var expand func(*yaml.Node) *yaml.Node
+	expand = func(source *yaml.Node) *yaml.Node {
+		if source.Kind == yaml.AliasNode {
+			return expand(source.Alias)
+		}
+		result := *source
+		result.Content = make([]*yaml.Node, len(source.Content))
+		for i, child := range source.Content {
+			result.Content[i] = expand(child)
+		}
+		return &result
+	}
+	data, err := yaml.Marshal(expand(node))
+	if err != nil {
+		return err
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	return decoder.Decode(&value)
 }
 
 // NetworkAdapter describes an additional NIC; Network and SwitchID remain the primary NIC.
@@ -95,7 +126,7 @@ func NewMachine() Machine {
 	if _, err := rand.Read(id[:]); err != nil {
 		panic(err)
 	}
-	return Machine{ID: hex.EncodeToString(id[:]), Backend: "hcs", GuestOS: "windows10", DynamicMemory: true, Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, MaxMemoryMiB: 8192, DiskGiB: 64, Network: "nat", Clipboard: true}
+	return Machine{ID: hex.EncodeToString(id[:]), Backend: "hcs", GuestOS: "windows10", Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, DiskGiB: 64, Network: "nat", Clipboard: true}
 }
 
 func (m Machine) Validate() error {
@@ -108,9 +139,7 @@ func (m Machine) Validate() error {
 	case m.CPUs < 1 || m.CPUs > 256:
 		return errors.New("CPU 数量需要在 1 到 256 之间")
 	case m.MemoryMiB < 256 || m.MemoryMiB > 1048576:
-		return errors.New("默认内存需要在 256 到 1048576 MiB 之间")
-	case m.MaxMemoryMiB != 0 && (m.MaxMemoryMiB < m.MemoryMiB || m.MaxMemoryMiB > 1048576):
-		return errors.New("最大内存不能小于默认内存，且不能超过 1048576 MiB")
+		return errors.New("内存需要在 256 到 1048576 MiB 之间")
 	case m.DiskGiB < 1 || m.DiskGiB > 65536:
 		return errors.New("磁盘需要在 1 到 65536 GiB 之间")
 	case m.Network != "nat" && m.Network != "bridge" && (m.Network != "none" || m.Backend != "hcs"):
@@ -207,26 +236,30 @@ func (m Machine) enabledNetworkAdapters() []NetworkAdapter {
 func ValidateShares(shares []Share) error { return sharing.Validate(sharedFolders(shares)) }
 
 func Load(path string) (Config, error) {
-	cfg := Config{}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return cfg, nil
+		return Config{}, nil
 	}
 	if err != nil {
-		return cfg, err
+		return Config{}, err
 	}
+	return decodeConfig(data)
+}
+
+func decodeConfig(data []byte) (Config, error) {
+	cfg := Config{}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	if err = decoder.Decode(&cfg); err != nil {
+	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("读取配置失败（不会覆盖原文件）: %w", err)
 	}
 	var extra any
-	if err = decoder.Decode(&extra); err != io.EOF {
+	if err := decoder.Decode(&extra); err != io.EOF {
 		return cfg, errors.New("配置必须只包含一份 YAML 文档（不会覆盖原文件）")
 	}
 	ids := map[string]bool{}
 	for _, m := range cfg.Machines {
-		if err = m.Validate(); err != nil {
+		if err := m.Validate(); err != nil {
 			return cfg, err
 		}
 		if ids[m.ID] {
@@ -234,7 +267,7 @@ func Load(path string) (Config, error) {
 		}
 		ids[m.ID] = true
 	}
-	if err = ValidateDeviceOwnership(cfg.Machines); err != nil {
+	if err := ValidateDeviceOwnership(cfg.Machines); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -257,7 +290,6 @@ func Save(path string, cfg Config) error {
 		"pipe":                     `本机绝对命名管道 \\.\pipe\...；my-vm- 前缀保留给控制台。`,
 		"guest_os":                 "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
 		"linux_desktop":            "Linux 增强会话仅支持 wayland（现有 GNOME/KDE）；旧 x11 配置只为兼容读取保留，增强方式已停用，不安装或替换桌面。",
-		"dynamic_memory":           "启用可分页内存后备、客户机冷页回收提示及运行中手动调整；不是 Hyper-V VMMS 自动伸缩策略，回收依赖客户机支持。",
 		"gpu_shared":               "启用 Hyper-V GPU-PV 共享，默认关闭；需要兼容主机和客户机驱动，不保证显卡支持。",
 		"backend":                  "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",
 		"switch_id":                "HCN 交换机 GUID；NAT 留空时精确选择系统 Default Switch，桥接须指定现有外部交换机。",
@@ -267,7 +299,7 @@ func Save(path string, cfg Config) error {
 		"qemu_dir": "旧版本的 QEMU 目录，仅为兼容读取保留，HCS 不使用。",
 		"machines": "虚拟机清单；HCS 磁盘位于同目录 machines/<id>/disk.vhdx。",
 		"id":       "内部唯一标识；请勿修改。", "name": "显示名称；共享项名称需为字母开头的英文、数字、下划线或连字符。", "cpus": "虚拟 CPU 数量。",
-		"memory_mib": "默认启动内存，单位 MiB；运行中调整不修改此值。", "max_memory_mib": "运行中手动调整的最大容量，单位 MiB；0 兼容旧配置上限 1048576，不表示自动增长。", "disk_gib": "创建时的磁盘容量，单位 GiB；修改此字段不会调整磁盘。",
+		"memory_mib": "固定内存，单位 MiB；仅在创建或关机编辑时设置。", "disk_gib": "创建时的磁盘容量，单位 GiB；修改此字段不会调整磁盘。",
 		"iso": "安装光盘 ISO 的绝对路径；留空表示不挂载光盘。", "network": "网络模式：nat、bridge 或 none（断开网络，复制后先处理客户机身份冲突）。",
 		"driver_iso":  "客户机工具或驱动光盘 ISO 的绝对路径；作为第二张只读光盘挂载，可与安装光盘同时使用。",
 		"display":     "旧版本的 std/virtio 显示设备记录；HCS 使用 Hyper-V 显示和本地 RDP。",

@@ -86,7 +86,7 @@ func run(args []string, stdout, stderr io.Writer) int {
   create <machine.yaml> | get <VM> | update <VM> <machine.yaml>
   clone <VM> <new-name> [@current|snapshot-name-or-ID] | remove <VM>（保留磁盘）
   state|start|stop|kill|pause|resume <VM> | shutdown-all
-  memory <VM> | memory set <VM> <MiB>
+  memory <VM>（只读查询）
   snapshot list <VM> | snapshot create|restore|delete <VM> <name>
   enhancements <VM> | media mount <VM> <host-iso>
   network list | network create <name> <CIDR> | network delete <ID>

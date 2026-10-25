@@ -193,12 +193,8 @@ func (a *application) editor(c *ui.Context) {
 					components.NumberInput(c, &a.cpu, 1, 256, 1).Label("虚拟 CPU 数量").FillWidth()
 				})
 				ui.Column(c).Key("memory").Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
-					text(c, "默认内存 / MiB")
-					components.NumberInput(c, &a.memory, 256, 1048576, 256).Label("默认内存 MiB").FillWidth()
-				})
-				ui.Column(c).Key("max-memory").Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
-					text(c, "最大内存 / MiB")
-					components.NumberInput(c, &a.maxMemory, 256, 1048576, 256).Label("最大内存 MiB").FillWidth()
+					text(c, "内存 / MiB")
+					components.NumberInput(c, &a.memory, 256, 1048576, 256).Label("内存 MiB").FillWidth()
 				})
 				ui.Column(c).Key("disk").Grow(1).Basis(0).MinWidth(0).Gap(8).Disabled(!a.creating || a.cloneSource != nil).Children(func() {
 					text(c, "磁盘 / GiB")
@@ -206,14 +202,7 @@ func (a *application) editor(c *ui.Context) {
 				})
 			})
 			infoRow(c, "虚拟化引擎", "Hyper-V HCS / 硬件虚拟化")
-			memoryLabel := "内存回收与热调整：关闭"
-			if a.draft.DynamicMemory {
-				memoryLabel = "内存回收与热调整：开启"
-			}
-			if button(c, memoryLabel, true) {
-				a.draft.DynamicMemory = !a.draft.DynamicMemory
-			}
-			muted(c, "默认值用于启动，最大值限制运行中的手动调整。开启回收后，支持的客户机可归还不用的宿主内存页面；容量不会自动增长到最大值。")
+			muted(c, "内存容量在运行期间保持固定；修改前请先关闭虚拟机。")
 			gpuLabel := "GPU 共享：关闭"
 			if a.draft.GPUShared {
 				gpuLabel = "GPU 共享：开启"

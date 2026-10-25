@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"encoding/json"
+	"fmt"
 	"my-vm/internal/sharing"
 	"os"
 	"path/filepath"
@@ -86,6 +88,73 @@ func TestConfigRejectsUnknownFieldsAndDocuments(t *testing.T) {
 		}
 	}
 }
+func TestLegacyMemoryConfigKeepsOnlyFixedCapacity(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			machine := NewMachine()
+			path := filepath.Join(t.TempDir(), "library.yaml")
+			input := fmt.Sprintf("machines:\n  - id: %s\n    name: Legacy\n    backend: hcs\n    cpus: 2\n    memory_mib: 4096\n    disk_gib: 64\n    network: none\n    dynamic_memory: %t\n    max_memory_mib: 8192\n", machine.ID, enabled)
+			if err := os.WriteFile(path, []byte(input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil || len(cfg.Machines) != 1 || cfg.Machines[0].MemoryMiB != 4096 {
+				t.Fatal("legacy memory changed", cfg, err)
+			}
+			if err = Save(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range []string{string(data), string(encoded)} {
+				if strings.Contains(value, "dynamic_memory") || strings.Contains(value, "max_memory_mib") {
+					t.Fatal("retired configuration fields were saved", value)
+				}
+			}
+			loaded, err := Load(path)
+			if err != nil || !reflect.DeepEqual(loaded, cfg) {
+				t.Fatal("fixed configuration did not round trip", loaded, err)
+			}
+		})
+	}
+}
+
+func TestMemoryConfigWithSharedYAMLDefaults(t *testing.T) {
+	first, second := NewMachine(), NewMachine()
+	data := fmt.Sprintf("machines:\n  - &defaults\n    id: %s\n    name: First\n    backend: hcs\n    cpus: 2\n    memory_mib: 4096\n    disk_gib: 64\n    network: none\n    dynamic_memory: true\n    max_memory_mib: 8192\n  - <<: *defaults\n    id: %s\n    name: Second\n", first.ID, second.ID)
+	cfg, err := decodeConfig([]byte(data))
+	if err != nil || len(cfg.Machines) != 2 || cfg.Machines[1].MemoryMiB != 4096 || cfg.Machines[1].ID != second.ID {
+		t.Fatal("shared configuration defaults changed", cfg, err)
+	}
+}
+
+func TestFixedMemoryConfiguration(t *testing.T) {
+	machine := NewMachine()
+	machine.Network = "none"
+	if machine.MemoryMiB != 4096 {
+		t.Fatal("unexpected default fixed memory", machine)
+	}
+	for _, guest := range []string{"windows10", "ubuntu26"} {
+		for _, size := range []int{256, 4096, 16384} {
+			machine.GuestOS, machine.MemoryMiB = guest, size
+			cfg, err := configurationWithEndpoints(t.TempDir(), machine, nil, "S-1-5-21-test", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			memory := cfg["VirtualMachine"].(map[string]any)["ComputeTopology"].(map[string]any)["Memory"]
+			if !reflect.DeepEqual(memory, map[string]any{"SizeInMB": size, "AllowOvercommit": false}) {
+				t.Fatal("HCS memory must use a fixed physical allocation", memory)
+			}
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -94,6 +163,7 @@ func TestValidate(t *testing.T) {
 		{"traversal", func(m *Machine) { m.ID = "../../disk" }},
 		{"cpu", func(m *Machine) { m.CPUs = 0 }},
 		{"memory", func(m *Machine) { m.MemoryMiB = 1 }},
+		{"memory too large", func(m *Machine) { m.MemoryMiB = 1048577 }},
 		{"disk", func(m *Machine) { m.DiskGiB = 0 }},
 		{"name", func(m *Machine) { m.Name = " " }},
 		{"network", func(m *Machine) { m.Network = "unknown" }},

@@ -40,10 +40,8 @@ my-vm-cli.exe remove "Test VM Copy"
 name: Test VM
 # 虚拟 CPU 数量，1 到 256。
 cpus: 4
-# 下次启动的默认内存，单位 MiB；修改硬件须先关机。
+# 固定内存，单位 MiB，256 到 1048576；修改前须先关机。
 memory_mib: 4096
-# 允许运行时调整到的最大内存，不小于默认内存，单位 MiB。
-max_memory_mib: 8192
 # 主网卡模式：nat、bridge 或 none；bridge 需要 switch_id。
 network: none
 # 映射到客户机的宿主目录列表，最多 16 项。
@@ -68,14 +66,13 @@ my-vm-cli.exe state "Test VM"
 my-vm-cli.exe --wait pause "Test VM"
 my-vm-cli.exe --wait resume "Test VM"
 my-vm-cli.exe memory "Test VM"
-my-vm-cli.exe memory set "Test VM" 6144
 my-vm-cli.exe enhancements "Test VM"
 my-vm-cli.exe media mount "Test VM" "C:\Work\tools.iso"
 my-vm-cli.exe --wait stop "Test VM"
 my-vm-cli.exe --timeout 600 shutdown-all
 ```
 
-`memory_mib` 是下次启动的默认容量；`max_memory_mib` 是库和 CLI 共同执行的运行调整上限，不是自动增长目标。旧配置缺少上限时保留原来的 1048576 MiB 调整上限。`dynamic_memory` 开启 HCS 延迟提交和客户机空闲页回报/回收，并允许手动热调整；它不等同于 Hyper-V 管理器根据压力自动在最小/最大容量之间增减的动态内存。实际回收依赖客户机支持，查询值是设定容量而非物理占用。运行内存调整不修改下次启动的配置。
+`memory_mib` 是固定容量，只能在创建或关机编辑时设置，运行期间不能调整。`memory <VM>` 只查询当前运行会话的固定容量（MiB），未运行时返回 0；它不是实时物理占用。旧 YAML 中的 `dynamic_memory` 和 `max_memory_mib` 仅为兼容导入而忽略，保存和导出不再包含这两个字段。修改内存后，恢复运行或暂停快照前需将内存改回与快照一致。旧版启用动态内存时保存的运行／暂停现场会明确拒绝恢复，不会自动冷启动；可从该快照克隆磁盘后重新启动。
 
 `stop` 请求正常关机，`kill` 强制断电，`shutdown-all` 等待全部实际关机。`enhancements` 按客户机系统准备、登记并在运行时插入增强盘，复用 GUI 的宿主驱动收集和校验流程；安装器仍需在客户机运行。`media mount` 临时更换运行中的客户机工具光盘，不修改已保存的启动配置。CLI 不提供 RDP 窗口或鼠标键盘控制，GUI 负责画面显示。
 

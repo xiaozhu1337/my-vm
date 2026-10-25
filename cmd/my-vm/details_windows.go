@@ -149,9 +149,6 @@ func (a *application) machineMenu(menu *ui.Menu, m vm.Machine, state string) {
 			a.refreshSnapshots(m)
 		}
 	}
-	if menu.Item("调整运行内存").Disabled(blocked || state != "运行中" || !m.DynamicMemory || !hcs).Chosen() && a.selectMachine(m, "memory", 0) {
-		a.runtimeMemoryID = ""
-	}
 	menu.Separator()
 	if menu.Item("基础控制台（安装与维护）").Disabled(blocked || off || !hcs).Chosen() {
 		a.run(m.ID, "打开基础控制台「"+m.Name+"」", func() error { return a.showDisplay(m.ID, false, false) }, nil)

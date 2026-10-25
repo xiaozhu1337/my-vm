@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 	"reflect"
 
+	"go.yaml.in/yaml/v3"
 	"golang.org/x/sys/windows"
 	"my-vm/internal/checkpoint"
 	"my-vm/internal/hcs"
 )
+
+var errLegacySnapshotMemory = errors.New("旧版动态内存运行快照无法恢复为固定内存；可从该快照克隆磁盘后重新启动")
 
 // copyState copies firmware while the VM is paused or stopped; writers must stay paused until it returns.
 func copyState(source, target string, replace bool) error {
@@ -129,7 +132,11 @@ func loadSnapshotMachine(machine Machine, storage *checkpoint.Store, entry check
 	if err := storage.CheckFiles(entry.StateFiles()...); err != nil {
 		return machine, err
 	}
-	config, err := Load(snapshotStatePath(storage, entry, "yaml"))
+	data, err := os.ReadFile(snapshotStatePath(storage, entry, "yaml"))
+	if err != nil {
+		return machine, err
+	}
+	config, err := decodeConfig(data)
 	if err != nil {
 		return machine, err
 	}
@@ -140,16 +147,27 @@ func loadSnapshotMachine(machine Machine, storage *checkpoint.Store, entry check
 	if entry.State == "off" {
 		return machine, nil
 	}
-	// Memory hot changes are part of the saved session, not the configured next-boot default.
+	// Legacy RAM was captured with a different memory backing configuration.
+	var legacy struct {
+		Machines []struct {
+			DynamicMemory bool `yaml:"dynamic_memory"`
+		} `yaml:"machines"`
+	}
+	if err = yaml.Unmarshal(data, &legacy); err != nil {
+		return machine, err
+	}
+	if legacy.Machines[0].DynamicMemory {
+		return machine, errLegacySnapshotMemory
+	}
+	if machine.MemoryMiB != saved.MemoryMiB {
+		return machine, fmt.Errorf("快照内存为 %d MiB，与当前固定内存 %d MiB 不一致；请关机恢复原内存配置后重试", saved.MemoryMiB, machine.MemoryMiB)
+	}
 	candidate := machine
-	candidate.Name, candidate.MemoryMiB, candidate.MaxMemoryMiB = saved.Name, saved.MemoryMiB, saved.MaxMemoryMiB
+	candidate.Name = saved.Name
 	candidate.Shares, candidate.Clipboard = saved.Shares, saved.Clipboard
 	candidate.DriverISO = saved.DriverISO // Guest tools may have been mounted only in the running session.
 	if !reflect.DeepEqual(candidate, saved) {
 		return machine, errors.New("硬件或挂载光盘配置与快照不一致，请恢复原配置后重试；原虚拟机保持不变")
-	}
-	if saved.MemoryMiB > machine.MemoryLimitMiB() {
-		return machine, errors.New("快照内存超过当前最大内存，请先提高最大内存")
 	}
 	for _, path := range []string{saved.ISO, saved.DriverISO} {
 		if path == "" {
@@ -163,7 +181,7 @@ func loadSnapshotMachine(machine Machine, storage *checkpoint.Store, entry check
 			return machine, fmt.Errorf("快照光盘不是普通文件: %s", path)
 		}
 	}
-	machine.MemoryMiB, machine.DriverISO = saved.MemoryMiB, saved.DriverISO
+	machine.DriverISO = saved.DriverISO
 	return machine, nil
 }
 

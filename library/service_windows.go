@@ -201,8 +201,6 @@ func (s *Service) Execute(ctx context.Context, r Request) (value any, err error)
 		return nil, s.runtime.Control(machine.ID, command)
 	case "memory":
 		return s.runtime.Memory(machine.ID), nil
-	case "memory-set":
-		return nil, s.runtime.SetMemory(machine.ID, r.Size)
 	case "snapshots":
 		snapshots, err := s.runtime.Snapshots("", machine)
 		return page(snapshots, r.Offset, r.Limit), err

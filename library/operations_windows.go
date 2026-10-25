@@ -41,7 +41,7 @@ func (s *Service) reserve(ctx context.Context, r *Request) (func(), error) {
 			return nil, err
 		}
 		return s.gate.Unlock, nil
-	case "create", "update", "remove", "clone", "start", "stop", "kill", "pause", "resume", "memory-set", "snapshot-create", "snapshot-restore", "snapshot-delete", "snapshots", "enhancements", "media-mount":
+	case "create", "update", "remove", "clone", "start", "stop", "kill", "pause", "resume", "snapshot-create", "snapshot-restore", "snapshot-delete", "snapshots", "enhancements", "media-mount":
 	default:
 		return func() {}, nil
 	}

@@ -209,7 +209,6 @@ func (c *commands) action(args []string) (vm.Request, error) {
 			return bad("create <machine.yaml> | update <VM> <machine.yaml>")
 		}
 		machine := vm.NewMachine()
-		machine.MaxMemoryMiB = 0 // Preserve legacy imports that omit the new ceiling.
 		if args[0] == "update" {
 			request.VM = args[1]
 			if err := c.connect(); err != nil {
@@ -261,18 +260,10 @@ func (c *commands) action(args []string) (vm.Request, error) {
 		}
 		request.Action, request.Name = "snapshot-"+args[1], args[3]
 	case "memory":
-		if len(args) == 2 {
-			request.VM = args[1]
-			break
+		if len(args) != 2 {
+			return bad("memory <VM>")
 		}
-		if len(args) != 4 || args[1] != "set" {
-			return bad("memory <VM> | memory set <VM> <MiB>")
-		}
-		size, err := strconv.Atoi(args[3])
-		if err != nil || size < 1 {
-			return bad("内存 MiB 必须为正整数")
-		}
-		request.Action, request.VM, request.Size = "memory-set", args[2], size
+		request.VM = args[1]
 	case "media":
 		if len(args) != 4 || args[1] != "mount" {
 			return bad("media mount <VM> <host-iso>")

@@ -95,11 +95,7 @@ func configurationWithEndpoints(root string, m Machine, endpoints []string, sid 
 		}
 		devices["ComPorts"] = ports
 	}
-	memory := map[string]any{"SizeInMB": m.MemoryMiB, "AllowOvercommit": m.DynamicMemory}
-	if m.DynamicMemory {
-		// Guest page reporting can release backing pages without changing visible capacity.
-		memory["EnableDeferredCommit"], memory["EnableColdHint"], memory["EnableColdDiscardHint"] = true, true, true
-	}
+	memory := map[string]any{"SizeInMB": m.MemoryMiB, "AllowOvercommit": false}
 	directory := filepath.Dir(DiskPath(root, m))
 	return map[string]any{
 		"SchemaVersion":                     map[string]int{"Major": 2, "Minor": 5},

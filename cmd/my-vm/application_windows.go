@@ -19,8 +19,6 @@ import (
 )
 
 type application struct {
-	runtimeMemory                           float64
-	runtimeMemoryID                         string
 	networks                                []vm.Switch
 	root                                    string
 	logger                                  *logging.Logger
@@ -51,7 +49,7 @@ type application struct {
 	listPage, filter, detailTab             int
 	draft, savedDraft, persistedDraft       vm.Machine
 	creating                                bool
-	cpu, memory, maxMemory, disk            float64
+	cpu, memory, disk                       float64
 	snapshots                               []vm.Snapshot
 	snapshotsLoaded                         bool
 	snapshotName, snapshotSelected          string
@@ -109,7 +107,6 @@ func (a *application) edit(m vm.Machine, creating bool) {
 	a.creating = creating
 	a.cpu = float64(m.CPUs)
 	a.memory = float64(m.MemoryMiB)
-	a.maxMemory = float64(m.MemoryLimitMiB())
 	a.disk = float64(m.DiskGiB)
 	a.page = "edit"
 }
@@ -123,7 +120,6 @@ func (a *application) saveDraft() {
 	m.Name = strings.TrimSpace(m.Name)
 	m.CPUs = int(a.cpu)
 	m.MemoryMiB = int(a.memory)
-	m.MaxMemoryMiB = int(a.maxMemory)
 	m.DiskGiB = int(a.disk)
 	if err := m.Validate(); err != nil {
 		a.report(err)
@@ -176,7 +172,7 @@ func (a *application) finishEditing(machine vm.Machine, version int) {
 func (a *application) hasUnsavedChanges() bool {
 	switch a.page {
 	case "edit":
-		return !reflect.DeepEqual(a.draft, a.savedDraft) || a.cpu != float64(a.savedDraft.CPUs) || a.memory != float64(a.savedDraft.MemoryMiB) || a.maxMemory != float64(a.savedDraft.MemoryLimitMiB()) || a.disk != float64(a.savedDraft.DiskGiB)
+		return !reflect.DeepEqual(a.draft, a.savedDraft) || a.cpu != float64(a.savedDraft.CPUs) || a.memory != float64(a.savedDraft.MemoryMiB) || a.disk != float64(a.savedDraft.DiskGiB)
 	case "settings":
 		return false
 	}

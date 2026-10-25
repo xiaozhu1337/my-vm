@@ -37,6 +37,9 @@ func (m *Manager) rollbackSnapshotRestore(storage *checkpoint.Store, machine Mac
 	}
 	if r.Rollback != nil {
 		if err := m.startSession(machine, r.Rollback, true); err != nil {
+			if errors.Is(err, errLegacySnapshotMemory) {
+				return fmt.Errorf("原磁盘及固件已回退，旧 RAM 和恢复记录保留；请克隆当前工作状态或快照的磁盘: %w", err)
+			}
 			return fmt.Errorf("回退原运行现场失败，恢复记录及 RAM 保留，可重试启动: %w", err)
 		}
 	}

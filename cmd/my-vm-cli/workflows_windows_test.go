@@ -30,7 +30,7 @@ func TestCommandMappings(t *testing.T) {
 		{[]string{"clone", "VM", "Copy"}, "clone", "VM", "Copy"},
 		{[]string{"snapshot", "list", "VM"}, "snapshots", "VM", ""},
 		{[]string{"snapshot", "restore", "VM", "before"}, "snapshot-restore", "VM", "before"},
-		{[]string{"memory", "set", "VM", "8192"}, "memory-set", "VM", ""},
+		{[]string{"memory", "VM"}, "memory", "VM", ""},
 		{[]string{"enhancements", "VM"}, "enhancements", "VM", ""},
 		{[]string{"media", "mount", "VM", "disc.iso"}, "media-mount", "VM", ""},
 		{[]string{"network", "list"}, "networks", "", ""},
@@ -46,7 +46,7 @@ func TestCommandMappings(t *testing.T) {
 			t.Fatal(test, request, err)
 		}
 	}
-	for _, args := range [][]string{{"unknown"}, {"clone", "VM"}, {"network", "delete"}, {"snapshot", "create", "VM"}, {"memory", "set", "VM", "-1"}, {"settings", "set", "side-channel-mitigations", "maybe"}, {"get"}, {"create"}, {"update", "VM"}} {
+	for _, args := range [][]string{{"unknown"}, {"clone", "VM"}, {"network", "delete"}, {"snapshot", "create", "VM"}, {"memory", "set", "VM", "-1"}, {"memory", "set", "VM", "8192"}, {"memory"}, {"settings", "set", "side-channel-mitigations", "maybe"}, {"get"}, {"create"}, {"update", "VM"}} {
 		if _, err := c.action(args); err == nil {
 			t.Fatal("accepted malformed command", args)
 		}
@@ -68,19 +68,20 @@ func TestCloneSourceCommandMappings(t *testing.T) {
 	}
 }
 
-func TestCreateImportsLegacyMemoryCeiling(t *testing.T) {
+func TestCreateImportsFixedMemory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.yaml")
-	for _, maximum := range []int{0, 32768} {
-		data := "memory_mib: 16384\n"
-		if maximum != 0 {
-			data += "max_memory_mib: 32768\n"
-		}
+	for _, legacy := range []string{"", "dynamic_memory: true\nmax_memory_mib: 32768\n", "dynamic_memory: false\nmax_memory_mib: 0\n"} {
+		data := "memory_mib: 16384\n" + legacy
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
 		request, err := (&commands{}).action([]string{"create", path})
-		if err != nil || request.Machine.Validate() != nil || request.Machine.MaxMemoryMiB != maximum {
-			t.Fatal("legacy memory limit changed", request.Machine, err)
+		if err != nil || request.Machine.Validate() != nil || request.Machine.MemoryMiB != 16384 {
+			t.Fatal("fixed memory import changed", request.Machine, err)
+		}
+		encoded, err := yaml.Marshal(request.Machine)
+		if err != nil || strings.Contains(string(encoded), "dynamic_memory") || strings.Contains(string(encoded), "max_memory_mib") {
+			t.Fatal("retired fields survived import", string(encoded), err)
 		}
 	}
 }

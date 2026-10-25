@@ -2,12 +2,14 @@ package vm
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"go.yaml.in/yaml/v3"
 	"my-vm/internal/checkpoint"
 	"my-vm/internal/media"
 )
@@ -33,9 +35,13 @@ func TestSnapshotStateValidationAndDeviceIdentity(t *testing.T) {
 	}
 	current := machine
 	current.MemoryMiB = 1024
+	if _, err = loadSnapshotMachine(current, storage, entry); err == nil {
+		t.Fatal("different fixed memory accepted")
+	}
+	current.MemoryMiB = machine.MemoryMiB
 	resumed, err := loadSnapshotMachine(current, storage, entry)
-	if err != nil || resumed.MemoryMiB != 512 {
-		t.Fatal("saved hot memory not restored", resumed, err)
+	if err != nil || resumed.MemoryMiB != current.MemoryMiB {
+		t.Fatal("matching fixed memory changed", resumed, err)
 	}
 	current.CPUs++
 	if _, err = loadSnapshotMachine(current, storage, entry); err == nil {
@@ -61,6 +67,48 @@ func TestSnapshotStateValidationAndDeviceIdentity(t *testing.T) {
 	}
 	if _, err = loadSnapshotMachine(machine, storage, entry); err == nil {
 		t.Fatal("missing RAM silently fell back to booting")
+	}
+}
+
+func TestLegacySnapshotMemoryBacking(t *testing.T) {
+	for _, state := range []string{"off", "running", "paused"} {
+		for _, dynamic := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", state, dynamic), func(t *testing.T) {
+				machine := NewMachine()
+				storage, err := checkpoint.Load(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry, _ := checkpoint.NewEntry("legacy")
+				entry.State = state
+				for _, file := range entry.StateFiles() {
+					if err = os.WriteFile(storage.Path(file), []byte("saved"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				data, err := yaml.Marshal(Config{Machines: []Machine{machine}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config map[string]any
+				if err = yaml.Unmarshal(data, &config); err != nil {
+					t.Fatal(err)
+				}
+				saved := config["machines"].([]any)[0].(map[string]any)
+				saved["dynamic_memory"], saved["max_memory_mib"] = dynamic, 8192
+				data, err = yaml.Marshal(config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(snapshotStatePath(storage, entry, "yaml"), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				loaded, err := loadSnapshotMachine(machine, storage, entry)
+				if (err != nil) != (dynamic && state != "off") || loaded.MemoryMiB != machine.MemoryMiB {
+					t.Fatal("legacy snapshot memory compatibility changed", loaded.MemoryMiB, err)
+				}
+			})
+		}
 	}
 }
 
@@ -227,26 +275,5 @@ func TestSnapshotTemporaryMediaIsRestoredAndPreflightChecked(t *testing.T) {
 	}
 	if _, err = loadSnapshotMachine(machine, storage, entry); err == nil {
 		t.Fatal("missing snapshot media passed preflight")
-	}
-}
-
-func TestMemoryDefaultsAndRuntimeCeiling(t *testing.T) {
-	machine := NewMachine()
-	if machine.MemoryMiB != 4096 || machine.MaxMemoryMiB != 8192 {
-		t.Fatal("new machine defaults", machine)
-	}
-	machine.MaxMemoryMiB = machine.MemoryMiB - 1
-	if machine.Validate() == nil {
-		t.Fatal("maximum below default accepted")
-	}
-	machine.MaxMemoryMiB = 0
-	if machine.MemoryLimitMiB() != 1048576 || machine.Validate() != nil {
-		t.Fatal("old configuration lost adjustment range")
-	}
-	machine.MaxMemoryMiB = 8192
-	manager := NewManager(t.TempDir(), nil)
-	manager.sessions[machine.ID] = &session{machine: machine}
-	if manager.SetMemory(machine.ID, 8193) == nil {
-		t.Fatal("memory ceiling bypassed")
 	}
 }

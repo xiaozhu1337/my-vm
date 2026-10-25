@@ -30,7 +30,7 @@ func (m *Manager) Snapshots(_ string, machine Machine) ([]Snapshot, error) {
 	if err := requireHCS(machine); err != nil {
 		return nil, err
 	}
-	storage, err := m.storage(machine)
+	storage, err := m.snapshotSource(machine)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +45,23 @@ func (m *Manager) Snapshots(_ string, machine Machine) ([]Snapshot, error) {
 		names[e.ID], depths[e.ID] = e.Name, depth
 	}
 	return result, nil
+}
+
+// snapshotSource permits disk inspection after a legacy RAM rollback cannot be replayed.
+func (m *Manager) snapshotSource(machine Machine) (*checkpoint.Store, error) {
+	storage, err := m.storage(machine)
+	if !errors.Is(err, errLegacySnapshotMemory) {
+		return storage, err
+	}
+	storage, loadErr := checkpoint.Load(filepath.Dir(DiskPath(m.Root, machine)))
+	if loadErr != nil {
+		return nil, errors.Join(err, loadErr)
+	}
+	r := storage.Restoring
+	if r == nil || !r.Reverting || storage.Active != r.Active || storage.Current != r.Current {
+		return nil, err
+	}
+	return storage, nil
 }
 
 // storage reconciles an interrupted native backing-file switch before any disk operation.

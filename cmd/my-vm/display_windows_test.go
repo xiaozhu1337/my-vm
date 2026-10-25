@@ -13,9 +13,16 @@ func TestViewGuestHardwareSettings(t *testing.T) {
 	if a.draft.GuestOS != "ubuntu26" || a.config.Machines[0].GuestOS != "windows10" || a.draft.DesktopMode() != "wayland" {
 		t.Fatal("guest selection changed saved config")
 	}
-	click(t, tt, "内存回收与热调整：开启")
+	for _, label := range []string{"默认内存 MiB", "最大内存 MiB", "内存回收与热调整：开启", "内存回收与热调整：关闭"} {
+		if _, ok := tt.Find(label); ok {
+			t.Fatalf("retired memory control %q is still present", label)
+		}
+	}
+	if _, ok := tt.Find("内存 MiB"); !ok {
+		t.Fatal("fixed memory input is missing")
+	}
 	click(t, tt, "GPU 共享：关闭")
-	if a.draft.DynamicMemory || !a.draft.GPUShared || !a.hasUnsavedChanges() {
+	if !a.draft.GPUShared || !a.hasUnsavedChanges() {
 		t.Fatal("hardware draft not updated")
 	}
 	if !tt.HasText("dxgkrnl") || !tt.HasText("Hyper-V HCS") {
