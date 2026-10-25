@@ -130,7 +130,8 @@ func (s *Service) guest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, 400)
 		return
 	}
-	transport := &http.Transport{DisableKeepAlives: true, ResponseHeaderTimeout: time.Hour + time.Minute, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	// Read the full response before closing Hvsock; immediate peer close can truncate buffered data.
+	transport := &http.Transport{ResponseHeaderTimeout: time.Hour + time.Minute, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		defer cancel()
 		connection, err := winio.Dial(ctx, &winio.HvsockAddr{VMID: vmid, ServiceID: winio.VsockServiceID(guestops.Port)})

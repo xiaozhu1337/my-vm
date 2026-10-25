@@ -102,6 +102,37 @@ func TestPreparedMediaRetainsPublishedAndReclaimsOnlyOrphans(t *testing.T) {
 	}
 }
 
+func TestCopyFromRejectsTruncatedHTTPBodyWithoutReplacingFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1024")
+		_, _ = io.WriteString(w, "partial")
+	}))
+	defer server.Close()
+	client := NewClient(&http.Client{Transport: localTransport(func(r *http.Request) (*http.Response, error) {
+		request := r.Clone(r.Context())
+		request.URL.Scheme = "http"
+		request.URL.Host = strings.TrimPrefix(server.URL, "http://")
+		return server.Client().Transport.RoundTrip(request)
+	})})
+	defer client.Close()
+	root := t.TempDir()
+	target := filepath.Join(root, "existing.bin")
+	if err := os.WriteFile(target, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CopyFrom(context.Background(), "guest", "/source.bin", target, true); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal("truncated response accepted", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "original" {
+		t.Fatal("existing destination changed", string(data), err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatal("partial download leaked", entries, err)
+	}
+}
+
 func TestMachineSelectorRejectsAmbiguousNames(t *testing.T) {
 	first, second := NewMachine(), NewMachine()
 	first.Name = "Same"
