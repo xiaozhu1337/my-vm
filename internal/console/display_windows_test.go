@@ -401,6 +401,62 @@ func TestNativeInputModePolicy(t *testing.T) {
 	}
 }
 
+func TestNativeAutomaticScaling(t *testing.T) {
+	if os.Getenv("MY_VM_INTEGRATION") != "1" {
+		t.Skip("set MY_VM_INTEGRATION=1 to test native RDP scaling without connecting a guest")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		t.Fatal(err)
+	}
+	defer ole.CoUninitialize()
+	object, err := ole.CreateInstance(ole.NewGUID("{A0C63C30-F08D-4AB4-907C-34905D770C7D}"), ole.IID_IUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer object.Release()
+	client, err := object.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Release()
+	advanced, err := property(client, "AdvancedSettings9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer advanced.Release()
+	for _, test := range []struct {
+		name                                 string
+		enhanced, wayland, dynamicResolution bool
+	}{
+		{"GNOME dynamic resolution", true, true, true},
+		{"Linux fixed resolution", true, true, false},
+		{"Windows enhanced", true, false, false},
+		{"Basic console", false, false, false},
+	} {
+		if err := put(advanced, "SmartSizing", false); err != nil {
+			t.Fatal(test.name, err)
+		}
+		if err := extended(client, "EnableZoom", ole.VARIANT{VT: ole.VT_BOOL}); err != nil {
+			t.Fatal(test.name, err)
+		}
+		v := &viewer{client: client, advanced: advanced, enhanced: test.enhanced,
+			wayland: test.wayland, dynamicResolution: test.dynamicResolution}
+		if err := v.configureScaling(); err != nil {
+			t.Fatal(test.name, err)
+		}
+		sizing, err := oleutil.GetProperty(advanced, "SmartSizing")
+		if err != nil {
+			t.Fatal(test.name, err)
+		}
+		defer sizing.Clear()
+		if sizing.VT != ole.VT_BOOL || sizing.Val == 0 {
+			t.Fatal(test.name, "automatic frame fitting is disabled", sizing)
+		}
+	}
+}
+
 func TestDisplayResizeDebounceAndFailedUpdateRetry(t *testing.T) {
 	var state displayUpdate
 	now := time.Now()

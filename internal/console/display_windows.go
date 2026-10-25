@@ -66,6 +66,19 @@ type displaySettings struct {
 	dpi           uintptr
 }
 
+func (v *viewer) configureScaling() error {
+	// Fit the frame even while the guest is still applying a dynamic resolution update.
+	if err := put(v.advanced, "SmartSizing", true); err != nil {
+		return err
+	}
+	if v.wayland {
+		if err := extended(v.client, "EnableZoom", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
+			return fmt.Errorf("启用 Linux 桌面画面缩放: %w", err)
+		}
+	}
+	return nil
+}
+
 func (v *viewer) initialDesktop() displaySettings {
 	if v.renderer != nil {
 		initial := v.renderer.InitialDisplay

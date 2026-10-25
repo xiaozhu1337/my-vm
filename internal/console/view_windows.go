@@ -537,18 +537,16 @@ func (v *viewer) initialize() error {
 	for _, setting := range []struct {
 		name  string
 		value any
-	}{{"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.enhanced && v.clipboard}, {"RedirectDrives", false}, {"SmartSizing", !v.wayland || !v.dynamicResolution}} {
+	}{{"EnableAutoReconnect", false}, {"AuthenticationLevel", auth}, {"EnableCredSspSupport", v.wayland}, {"NegotiateSecurityLayer", true}, {"RedirectClipboard", v.enhanced && v.clipboard}, {"RedirectDrives", false}} {
 		if err = put(v.advanced, setting.name, setting.value); err != nil {
 			return err
 		}
 	}
+	if err = v.configureScaling(); err != nil {
+		return err
+	}
 	server := v.vmid
 	if v.wayland {
-		if !v.dynamicResolution {
-			if err = extended(v.client, "EnableZoom", ole.VARIANT{VT: ole.VT_BOOL, Val: -1}); err != nil {
-				return fmt.Errorf("启用 Linux 桌面画面缩放: %w", err)
-			}
-		}
 		server = "127.0.0.1"
 		if err = put(v.advanced, "RDPPort", v.rdpPort); err != nil {
 			return err

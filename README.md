@@ -10,7 +10,7 @@ A native Windows virtual machine manager for Windows and Linux guests, built on 
 
 - **Native Hyper-V performance.** Uses the Windows virtualization stack directly, with hardware-backed CPU, memory, storage, and networking. No QEMU runtime is required.
 - **Live snapshots with branches.** Create VHDX differencing snapshots while your guest keeps running. Progress appears in the background. Restore an earlier point and create a new branch without copying the entire system disk.
-- **Linux enhanced sessions.** Connect to the existing GNOME or KDE Plasma Wayland desktop. GNOME supports dynamic resolution; KDE uses display fitting. No replacement desktop or Xfce installation is required.
+- **Linux enhanced sessions.** Connect to the existing GNOME or KDE Plasma Wayland desktop, with the picture automatically fitted to the window. GNOME also supports dynamic resolution. No replacement desktop or Xfce installation is required.
 - **Shared clipboard.** Copy and paste between the host and guest in enhanced sessions. Enable clipboard sharing per VM; supported formats depend on the guest's desktop service.
 - **Private folder sharing.** Make selected host folders available inside the guest without copying files back and forth. Configure access per VM, with read-only access by default and optional write access, over a private Hyper-V Socket channel without exposing a TCP file-sharing port.
 - **Useful automation.** A separate CLI controls VMs and snapshots, executes guest commands, and transfers individual files in either direction.
