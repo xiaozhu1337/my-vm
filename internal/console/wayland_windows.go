@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"my-vm/internal/hvsock"
 	"net"
 	"time"
 
@@ -25,7 +26,7 @@ func linuxWaylandBridge(runtimeID string, log io.Writer) (int, func(), error) {
 	stop := serveWaylandBridge(listener, func(ctx context.Context) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		defer cancel()
-		return winio.Dial(ctx, &winio.HvsockAddr{VMID: id, ServiceID: winio.VsockServiceID(3390)})
+		return hvsock.Dial(ctx, &winio.HvsockAddr{VMID: id, ServiceID: winio.VsockServiceID(3390)})
 	}, log)
 	return listener.Addr().(*net.TCPAddr).Port, stop, nil
 }

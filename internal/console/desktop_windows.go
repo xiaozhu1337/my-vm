@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"my-vm/internal/guestops"
+	"my-vm/internal/hvsock"
 	"my-vm/internal/sharing"
 	"net"
 	"net/http"
@@ -31,7 +32,7 @@ func detectLinuxWayland(runtimeID string, log io.Writer) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	// go-winio cannot cancel a pending ConnectEx; bound the probe by its process lifetime.
+	// Keep desktop probing isolated from the UI process.
 	command := exec.CommandContext(ctx, executable, "--console", "--detect-desktop", runtimeID)
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 	output, err := command.Output()
@@ -58,8 +59,10 @@ func guestClient(runtimeID string) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		connection, err := winio.Dial(ctx, &winio.HvsockAddr{VMID: id, ServiceID: winio.VsockServiceID(guestops.Port)})
+	transport := &http.Transport{MaxIdleConns: 4, MaxIdleConnsPerHost: 4, MaxConnsPerHost: 8, IdleConnTimeout: 30 * time.Second, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		connection, err := hvsock.Dial(ctx, &winio.HvsockAddr{VMID: id, ServiceID: winio.VsockServiceID(guestops.Port)})
 		if err != nil {
 			return nil, err
 		}

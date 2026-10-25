@@ -9,6 +9,7 @@ import (
 	"github.com/Microsoft/go-winio/pkg/guid"
 	"golang.org/x/sys/windows"
 	"io"
+	"my-vm/internal/hvsock"
 	"net"
 )
 
@@ -44,7 +45,7 @@ func linuxBridge(pipe, runtimeID string, log io.Writer) (func(), error) {
 		defer incoming.Close()
 		closeIncoming := context.AfterFunc(ctx, func() { _ = incoming.Close() })
 		defer closeIncoming()
-		outgoing, err := winio.Dial(ctx, &winio.HvsockAddr{VMID: id, ServiceID: winio.VsockServiceID(3389)})
+		outgoing, err := hvsock.Dial(ctx, &winio.HvsockAddr{VMID: id, ServiceID: winio.VsockServiceID(3389)})
 		if err != nil {
 			if ctx.Err() == nil {
 				fmt.Fprintln(log, "连接 Linux xrdp/vsock:", err)
