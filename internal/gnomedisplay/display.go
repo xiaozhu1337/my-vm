@@ -160,10 +160,21 @@ func WithRemoteMonitor(ctx context.Context, log io.Writer, relay func(context.Co
 	}
 	defer bus.Close()
 	object := bus.Object(displayInterface, "/org/gnome/Mutter/DisplayConfig")
-	return withRemoteMonitor(ctx, object, log, relay)
+	changes := make(chan *dbus.Signal, 16)
+	bus.Signal(changes)
+	defer bus.RemoveSignal(changes)
+	register, stop := context.WithTimeout(ctx, 2*time.Second)
+	err = bus.AddMatchSignalContext(register, dbus.WithMatchSender(displayInterface), dbus.WithMatchObjectPath("/org/gnome/Mutter/DisplayConfig"), dbus.WithMatchInterface(displayInterface), dbus.WithMatchMember("MonitorsChanged"))
+	stop()
+	if err != nil {
+		return err
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	return withRemoteMonitor(ctx, object, changes, ticker.C, log, relay)
 }
 
-func withRemoteMonitor(ctx context.Context, object displayCaller, log io.Writer, relay func(context.Context) error) error {
+func withRemoteMonitor(ctx context.Context, object displayCaller, changes <-chan *dbus.Signal, fallback <-chan time.Time, log io.Writer, relay func(context.Context) error) error {
 	original, err := readState(ctx, object)
 	if err != nil {
 		return err
@@ -189,44 +200,64 @@ func withRemoteMonitor(ctx context.Context, object displayCaller, log io.Writer,
 	changed := false
 	go func() {
 		defer cancel()
-		// Authentication and certificate confirmation may wait for user input.
-		ticker := time.NewTicker(250 * time.Millisecond)
-		defer ticker.Stop()
+		finish := func(err error) {
+			if connection.Err() != nil {
+				err = nil
+			}
+			done <- err
+		}
 		for {
-			select {
-			case <-connection.Done():
-				done <- nil
-				return
-			case <-ticker.C:
-			}
-			s, err := readState(connection, object)
-			if err != nil {
-				done <- err
-				return
-			}
-			remote, found := remoteMonitor(s, original)
-			if !found {
-				if changed {
-					done <- nil
+			// Authentication may wait indefinitely; only individual D-Bus calls time out.
+			for attempt := 0; attempt < 3; attempt++ {
+				s, err := readState(connection, object)
+				if err != nil {
+					finish(err)
 					return
 				}
-				continue
-			}
-			layout, err := remoteConfig(remote, scale)
-			if err == nil {
-				current, _ := s.configuration()
-				changed = true
-				if reflect.DeepEqual(current, layout) {
+				remote, found := remoteMonitor(s, original)
+				if !found {
+					if changed {
+						finish(nil)
+						return
+					}
+					break
+				}
+				layout, err := remoteConfig(remote, scale)
+				if err == nil {
+					current, _ := s.configuration()
+					changed = true
+					if reflect.DeepEqual(current, layout) {
+						break
+					}
+					err = apply(connection, object, s, layout, s.properties)
+				}
+				if err != nil && strings.Contains(err.Error(), "based on stale information") {
 					continue
 				}
-				err = apply(connection, object, s, layout, s.properties)
+				if err != nil {
+					finish(err)
+					return
+				}
+				break
 			}
-			if err != nil && strings.Contains(err.Error(), "based on stale information") {
-				continue
-			}
-			if err != nil {
-				done <- err
-				return
+		wait:
+			for {
+				select {
+				case <-connection.Done():
+					finish(nil)
+					return
+				case signal, ok := <-changes:
+					if !ok {
+						finish(errors.New("GNOME display signal channel closed"))
+						return
+					}
+					if signal == nil || signal.Name != displayInterface+".MonitorsChanged" || signal.Path != "/org/gnome/Mutter/DisplayConfig" {
+						continue
+					}
+					break wait
+				case <-fallback:
+					break wait
+				}
 			}
 		}
 	}()

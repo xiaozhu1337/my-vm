@@ -68,6 +68,12 @@ func TestOnlyNewRemoteMonitorIsSelected(t *testing.T) {
 	}
 }
 
+func runTestMonitor(ctx context.Context, f *fakeDisplay, log io.Writer, relay func(context.Context) error) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	return withRemoteMonitor(ctx, f, nil, ticker.C, log, relay)
+}
+
 type fakeDisplay struct {
 	mu             sync.Mutex
 	current        state
@@ -114,7 +120,7 @@ func TestDesktopMovesAndRestoresOnDisconnectAndConfigurationError(t *testing.T) 
 	for _, fail := range []bool{false, true} {
 		f := &fakeDisplay{current: fixture(), fail: fail, applied: make(chan struct{})}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		err := withRemoteMonitor(ctx, f, io.Discard, func(connection context.Context) error {
+		err := runTestMonitor(ctx, f, io.Discard, func(connection context.Context) error {
 			if fail {
 				<-connection.Done()
 				return nil
@@ -175,7 +181,7 @@ func TestDesktopReappliesAfterResizeAndRetriesRestore(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	err := withRemoteMonitor(ctx, f, io.Discard, func(connection context.Context) error {
+	err := runTestMonitor(ctx, f, io.Discard, func(connection context.Context) error {
 		select {
 		case <-f.applied:
 		case <-connection.Done():
@@ -211,7 +217,7 @@ func TestStaleRemoteConfigurationIsRetriedWithoutDisconnect(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	err := withRemoteMonitor(ctx, f, io.Discard, func(connection context.Context) error {
+	err := runTestMonitor(ctx, f, io.Discard, func(connection context.Context) error {
 		select {
 		case <-retried:
 			return nil
@@ -229,7 +235,7 @@ func TestMissingCurrentModeDoesNotTouchDesktop(t *testing.T) {
 	s.monitors[0].Modes = nil
 	f := &fakeDisplay{current: s}
 	called := false
-	err := withRemoteMonitor(context.Background(), f, io.Discard, func(context.Context) error { called = true; return nil })
+	err := runTestMonitor(context.Background(), f, io.Discard, func(context.Context) error { called = true; return nil })
 	if err == nil || called || len(f.configurations) != 0 {
 		t.Fatal("connected without a restorable desktop", err)
 	}
