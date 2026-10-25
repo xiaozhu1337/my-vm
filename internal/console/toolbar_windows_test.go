@@ -553,8 +553,12 @@ func TestClearingPromptRestoresPreviousMessage(t *testing.T) {
 	for _, original := range []string{"已连接 · 关闭控制台后虚拟机继续运行", "已连接 · 虚拟机已恢复运行", "connection failed"} {
 		v := &viewer{status: original, statusError: original == "connection failed", log: io.Discard, toolbar: &consoleToolbar{}}
 		v.showPrompt(promptShutdown)
+		v.toolbar.noticeLayout = noticeLayout{width: 1280, dpi: 96, prompt: promptShutdown}
 		v.setStatus("已连接")
 		v.clearPrompt()
+		if v.toolbar.noticeLayout != (noticeLayout{}) {
+			t.Fatal("clearing a prompt left cached visible buttons after hiding them")
+		}
 		if v.status != original || v.statusError != (original == "connection failed") || v.toolbar.prompt != promptNone {
 			t.Fatal("cancelling a prompt left stale or duplicate text", v.status)
 		}

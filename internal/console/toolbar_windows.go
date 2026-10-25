@@ -63,6 +63,17 @@ type consoleToolbar struct {
 	guestNotice                 string
 	bounds                      [4]int32
 	style                       uintptr
+	layoutDPI                   uintptr
+	enabledButtons              uint64
+	layoutEnhanced              bool
+	noticeLayout                noticeLayout
+}
+
+type noticeLayout struct {
+	width, top, barHeight int32
+	dpi                   uintptr
+	prompt                toolbarPrompt
+	hidden, busy, canHide bool
 }
 
 type toolbarResult struct {
@@ -132,14 +143,22 @@ func (v *viewer) layoutToolbar(dpi uintptr) {
 	if v.toolbar == nil {
 		return
 	}
-	v.toolbar.painter.Font(dpi)
+	bar := v.toolbar
+	geometryChanged := bar.layoutDPI != dpi
+	selectionChanged := bar.layoutEnhanced != v.enhanced
+	if geometryChanged {
+		bar.painter.Font(dpi)
+	}
 	x, margin, height := int32(12*dpi/96), int32(4*dpi/96), int32(28*dpi/96)
-	for _, button := range v.toolbar.buttons {
+	var enabledButtons uint64
+	for i, button := range bar.buttons {
 		if button.id == toolbarKeys || button.id == toolbarPause {
 			x += int32(16 * dpi / 96)
 		}
 		width := button.width * int32(dpi) / 96
-		user32.NewProc("MoveWindow").Call(button.handle, uintptr(x), uintptr(6*dpi/96), uintptr(width), uintptr(height), 1)
+		if geometryChanged {
+			user32.NewProc("MoveWindow").Call(button.handle, uintptr(x), uintptr(6*dpi/96), uintptr(width), uintptr(height), 1)
+		}
 		x += width + margin
 		enabled := !v.toolbar.busy
 		switch button.id {
@@ -154,13 +173,17 @@ func (v *viewer) layoutToolbar(dpi uintptr) {
 		case toolbarFullscreen:
 			enabled = true
 		}
-		value := uintptr(0)
 		if enabled {
-			value = 1
+			enabledButtons |= 1 << i
 		}
-		user32.NewProc("EnableWindow").Call(button.handle, value)
-		user32.NewProc("InvalidateRect").Call(button.handle, 0, 0)
+		if geometryChanged || (bar.enabledButtons&(1<<i) != 0) != enabled {
+			user32.NewProc("EnableWindow").Call(button.handle, boolValue(enabled))
+			user32.NewProc("InvalidateRect").Call(button.handle, 0, 0)
+		} else if selectionChanged && (button.id == toolbarBasic || button.id == toolbarEnhanced) {
+			user32.NewProc("InvalidateRect").Call(button.handle, 0, 0)
+		}
 	}
+	bar.layoutDPI, bar.enabledButtons, bar.layoutEnhanced = dpi, enabledButtons, v.enhanced
 }
 
 func (v *viewer) toolbarCommand(id, source uintptr) bool {
@@ -392,6 +415,7 @@ func (v *viewer) clearPrompt() {
 		v.toolbar.availability.next = time.Now().Add(15 * time.Second)
 	}
 	v.toolbar.prompt = promptNone
+	v.toolbar.noticeLayout = noticeLayout{}
 	v.status, v.statusError = v.toolbar.promptStatus, v.toolbar.promptError
 	v.toolbar.promptStatus, v.toolbar.promptError = "", false
 	v.renderStatus()
@@ -464,6 +488,13 @@ func (v *viewer) finishPrompt(confirmed bool) {
 }
 
 func (v *viewer) layoutNotice(width, top, barHeight int32, dpi uintptr) {
+	if bar := v.toolbar; bar != nil {
+		layout := noticeLayout{width: width, top: top, barHeight: barHeight, dpi: dpi, prompt: bar.prompt, hidden: v.headerHidden, busy: bar.busy, canHide: v.canHideConnectedNotice()}
+		if layout == bar.noticeLayout {
+			return
+		}
+		bar.noticeLayout = layout
+	}
 	unit := func(value int32) int32 { return value * int32(dpi) / 96 }
 	bar := v.toolbar
 	show := !v.headerHidden

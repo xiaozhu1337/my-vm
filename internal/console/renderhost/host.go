@@ -32,6 +32,7 @@ type Worker struct {
 	Authenticating                           bool
 	ConnectDeadline                          time.Time
 	initialDisplay                           Packet
+	lastLayout                               Packet
 	ctx                                      context.Context
 	cancel                                   context.CancelFunc
 	commands                                 chan Packet
@@ -202,6 +203,10 @@ func (h *Host) Position(window uint64, x, y, width, height int32, visible bool) 
 			continue
 		}
 		p := Packet{Kind: "layout", X: x, Y: y, Width: width, Height: height, Visible: visible}
+		if p == w.lastLayout {
+			return
+		}
+		w.lastLayout = p
 		select {
 		case <-w.layout:
 		default:
