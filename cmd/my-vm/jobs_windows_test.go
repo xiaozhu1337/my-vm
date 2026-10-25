@@ -4,66 +4,11 @@ package main
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
-
-func TestPreparedMediaCleanupPreservesReferences(t *testing.T) {
-	a := testApplication(t, 2)
-	folder := t.TempDir()
-	paths := []string{filepath.Join(folder, "obsolete.iso"), filepath.Join(folder, "configured.iso"), filepath.Join(folder, "draft.iso")}
-	for _, path := range paths {
-		if err := os.WriteFile(path, []byte("private image"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	a.preparedMedia = map[string]bool{paths[0]: true, paths[1]: true, paths[2]: true}
-	a.config.Machines[1].DriverISO = paths[1]
-	a.page, a.draft.DriverISO = "edit", paths[2]
-	a.cleanupGuestMedia()
-	if _, err := os.Stat(paths[0]); !os.IsNotExist(err) {
-		t.Fatal("unreferenced private image was not removed", err)
-	}
-	for _, path := range paths[1:] {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatal("referenced private image removed", err)
-		}
-	}
-	a.config.Machines[1].DriverISO, a.page = "", ""
-	a.finishOperation("media-test", "test", errors.New("save failed"), nil)
-	if len(a.preparedMedia) != 0 {
-		t.Fatal("failed operation left unused private media", a.preparedMedia)
-	}
-}
-
-func TestPreparedMediaCleanupWaitsForQueuedReferences(t *testing.T) {
-	a := testApplication(t, 2)
-	path := filepath.Join(t.TempDir(), "generated.iso")
-	if err := os.WriteFile(path, []byte("private image"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	a.preparedMedia = map[string]bool{path: true}
-	a.configurationSaves = []configurationSave{{id: a.config.Machines[1].ID}}
-	a.cleanupGuestMedia()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatal("queued save lost its media", err)
-	}
-	a.configurationSaves = nil
-	a.config.Machines[1].ISO = strings.ReplaceAll(path, `\`, "/")
-	a.cleanupGuestMedia()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatal("installation drive reference was ignored", err)
-	}
-	a.config.Machines[1].ISO = ""
-	a.cleanupGuestMedia()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("unreferenced generated media retained", err)
-	}
-}
 
 func TestDiskJobAllowsNavigationAndBlocksSourceActions(t *testing.T) {
 	a := testApplication(t, 2)
@@ -113,43 +58,6 @@ func TestSnapshotResultsBelongToMachineAndRequest(t *testing.T) {
 	}
 }
 
-func TestCloneCompletionWaitsForLatestConfiguration(t *testing.T) {
-	a := testApplication(t, 2)
-	target := vm.NewClone(a.config.Machines[0], a.config.Machines)
-	secondID := a.config.Machines[1].ID
-	first := configurationSave{id: secondID, label: "保存", update: func(cfg *vm.Config) error {
-		cfg.Machines[1].Name = "Latest saved name"
-		third := vm.NewMachine()
-		third.Name = target.Name
-		cfg.Machines = append(cfg.Machines, third)
-		return nil
-	}}
-	// Hold the queue as though the first asynchronous save is still writing.
-	a.configurationSaves = []configurationSave{first}
-	a.finishClone(target)
-	if len(a.config.Machines) != 2 || len(a.configurationSaves) != 2 || !a.diskBusy(target.ID) {
-		t.Fatal("clone bypassed the configuration queue")
-	}
-	path := filepath.Join(a.root, "library.yaml")
-	for len(a.configurationSaves) > 0 {
-		cfg, err := a.configurationFor(a.configurationSaves[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = vm.Save(path, cfg); err != nil {
-			t.Fatal(err)
-		}
-		a.acceptConfiguration(cfg, nil)
-	}
-	cfg, err := vm.Load(path)
-	if err != nil || len(cfg.Machines) != 4 || cfg.Machines[1].Name != "Latest saved name" || cfg.Machines[3].ID != target.ID {
-		t.Fatal("clone completion lost another save or failed to persist clone", cfg, err)
-	}
-	if cfg.Machines[2].Name == cfg.Machines[3].Name || a.diskBusy(target.ID) {
-		t.Fatal("completion retained a duplicate name or left the target blocked")
-	}
-}
-
 func TestMachineOperationAllowsNavigationAndOtherOperations(t *testing.T) {
 	for _, label := range []string{"启动虚拟机", "暂停虚拟机", "打开增强会话", "调整运行内存", "读取快照", "插入增强光盘", "保存虚拟机"} {
 		t.Run(label, func(t *testing.T) {
@@ -182,25 +90,6 @@ func TestMachineOperationAllowsNavigationAndOtherOperations(t *testing.T) {
 	}
 }
 
-func TestConfigurationFailureKeepsLatestStateAndReleasesOnlyOwner(t *testing.T) {
-	a := testApplication(t, 2)
-	first, second := a.config.Machines[0].ID, a.config.Machines[1].ID
-	a.beginOperation(first, "保存配置")
-	a.beginOperation(second, "启动虚拟机")
-	a.configurationSaves = []configurationSave{{id: first, label: "保存配置", update: func(cfg *vm.Config) error {
-		cfg.Machines[0].Name = "Uncommitted"
-		return nil
-	}}}
-	cfg, err := a.configurationFor(a.configurationSaves[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.acceptConfiguration(cfg, errors.New("disk full"))
-	if a.config.Machines[0].Name == "Uncommitted" || !a.messageError || a.diskBusy(first) || !a.diskBusy(second) {
-		t.Fatal("failed save published an uncommitted configuration or released another operation")
-	}
-}
-
 func TestDiskAndExternalJobsOnlyReserveTheirMachines(t *testing.T) {
 	a := testApplication(t, 4)
 	first, second, third, fourth := a.config.Machines[0].ID, a.config.Machines[1].ID, a.config.Machines[2].ID, a.config.Machines[3].ID
@@ -220,26 +109,6 @@ func TestDiskAndExternalJobsOnlyReserveTheirMachines(t *testing.T) {
 	a.externalJobs = map[string]bool{first: true}
 	if a.beginOperation(first, "GUI 冲突") || !a.beginOperation(second, "其他 VM") {
 		t.Fatal("CLI reservation was not per machine")
-	}
-}
-
-func TestConfigurationMergeDoesNotResurrectRemovedMachine(t *testing.T) {
-	a := testApplication(t, 2)
-	saved := a.config.Machines[0]
-	saved.Name = "Renamed"
-	a.configurationSaves = []configurationSave{
-		{id: a.config.Machines[1].ID, label: "移除", update: func(cfg *vm.Config) error { cfg.Machines = cfg.Machines[:1]; return nil }},
-		{id: saved.ID, label: "保存", update: func(cfg *vm.Config) error { cfg.Machines[0] = saved; return nil }},
-	}
-	for len(a.configurationSaves) > 0 {
-		cfg, err := a.configurationFor(a.configurationSaves[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-		a.acceptConfiguration(cfg, nil)
-	}
-	if len(a.config.Machines) != 1 || a.config.Machines[0].Name != saved.Name {
-		t.Fatal("stale configuration resurrected a removed machine")
 	}
 }
 
@@ -284,22 +153,6 @@ func TestSaveCompletedDuringModalKeepsEditorAndMarksDraftSaved(t *testing.T) {
 	}
 	if a.draft.CPUs != 4 {
 		t.Fatal("save completion lost normalized hardware settings")
-	}
-}
-
-func TestFailedNewMachineRegistrationReportsRetainedDisk(t *testing.T) {
-	for _, label := range []string{"保存新虚拟机", "登记虚拟机副本"} {
-		t.Run(label, func(t *testing.T) {
-			a := testApplication(t, 1)
-			target := vm.NewMachine()
-			a.configurationSaves = []configurationSave{{id: target.ID, label: label}}
-			cfg := a.config
-			cfg.Machines = append(append([]vm.Machine(nil), cfg.Machines...), target)
-			a.acceptConfiguration(cfg, errors.New("permission denied"))
-			if len(a.config.Machines) != 1 || !a.messageError || !strings.Contains(a.message, vm.DiskPath(a.root, target)) || !strings.Contains(a.message, "permission denied") {
-				t.Fatal("failed registration lost its disk recovery location", a.message)
-			}
-		})
 	}
 }
 

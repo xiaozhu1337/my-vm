@@ -8,12 +8,36 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 type diskJob struct {
 	machineID, targetID, name, label string
 	copied, total                    int64
+}
+
+func (a *application) syncJobs() {
+	external := map[string]bool{}
+	for _, machine := range a.config.Machines {
+		progress := a.manager.Progress(machine.ID)
+		if progress == nil {
+			continue
+		}
+		if local := a.diskJobs[machine.ID]; local != nil {
+			local.copied, local.total = progress.Completed, progress.Total
+		} else {
+			external[machine.ID] = true
+		}
+		if progress.Target != "" {
+			external[progress.Target] = true
+		}
+	}
+	for id := range a.externalJobs {
+		if !external[id] && id == a.selected {
+			a.resetSnapshots()
+		}
+	}
+	a.externalJobs = external
 }
 
 func (a *application) diskBusy(id string) bool {
@@ -66,7 +90,14 @@ func (a *application) runDisk(label string, machine vm.Machine, targetID string,
 				}
 			})
 		})
+		cfg, refreshError := a.refresh()
+		if err == nil && refreshError != nil {
+			err = fmt.Errorf("操作已完成，但刷新失败，请核对: %w", refreshError)
+		}
 		mygo.RunOnMain(func() {
+			if refreshError == nil {
+				a.config = cfg
+			}
 			delete(a.diskJobs, machine.ID)
 			if err != nil {
 				a.report(fmt.Errorf("%s「%s」: %w", label, machine.Name, err))
@@ -77,7 +108,6 @@ func (a *application) runDisk(label string, machine vm.Machine, targetID string,
 					done()
 				}
 			}
-			a.cleanupGuestMedia()
 			if a.window != nil {
 				a.window.Invalidate()
 			}

@@ -3,19 +3,29 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"path/filepath"
-	"slices"
+	"time"
 
 	"github.com/egoist/mygo"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
-type configurationSave struct {
-	id, label string
-	update    func(*vm.Config) error
-	done      func()
-	finalize  func()
+func (a *application) action(request vm.Request) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	_, err := a.manager.Execute(ctx, request)
+	return err
+}
+
+func (a *application) refresh() (vm.Config, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg, err := a.manager.Configuration(ctx)
+	if err == nil {
+		err = a.manager.Refresh(ctx)
+	}
+	return cfg, err
 }
 
 func (a *application) beginOperation(id, label string) bool {
@@ -40,94 +50,26 @@ func (a *application) finishOperation(id, label string, err error, done func()) 
 			done()
 		}
 	}
-	a.cleanupGuestMedia()
 	if a.window != nil {
 		a.window.Invalidate()
 	}
 }
 
 func (a *application) run(id, label string, work func() error, done func()) {
-	a.runConfig(id, label, work, nil, done)
-}
-
-func (a *application) runConfig(id, label string, work func() error, update func(*vm.Config) error, done func(), finalize ...func()) {
 	if !a.beginOperation(id, label) {
 		return
 	}
-	var settled func()
-	if len(finalize) > 0 {
-		settled = finalize[0]
-	}
 	go func() {
 		err := work()
+		cfg, refreshError := a.refresh()
+		if err == nil && refreshError != nil {
+			err = fmt.Errorf("操作已完成，但刷新失败，请刷新后核对: %w", refreshError)
+		}
 		mygo.RunOnMain(func() {
-			if err != nil || update == nil {
-				if settled != nil {
-					settled()
-				}
-				a.finishOperation(id, label, err, done)
-				return
+			if refreshError == nil {
+				a.config = cfg
 			}
-			a.queueConfiguration(configurationSave{id: id, label: label, update: update, done: done, finalize: settled})
+			a.finishOperation(id, label, err, done)
 		})
 	}()
-}
-
-func (a *application) queueConfiguration(save configurationSave) {
-	if a.operations == nil {
-		a.operations = map[string]string{}
-	}
-	a.operations[save.id] = save.label
-	a.configurationSaves = append(a.configurationSaves, save)
-	if len(a.configurationSaves) == 1 {
-		a.writeConfiguration()
-	}
-}
-
-func (a *application) configurationFor(save configurationSave) (vm.Config, error) {
-	cfg := a.config
-	cfg.Machines = slices.Clone(cfg.Machines)
-	err := save.update(&cfg)
-	return cfg, err
-}
-
-// Build each queued save from the latest committed configuration, not a worker's old copy.
-func (a *application) writeConfiguration() {
-	save := a.configurationSaves[0]
-	cfg, err := a.configurationFor(save)
-	if err != nil {
-		a.acceptConfiguration(cfg, err)
-		if len(a.configurationSaves) > 0 {
-			a.writeConfiguration()
-		}
-		return
-	}
-	go func() {
-		err := vm.Save(filepath.Join(a.root, "library.yaml"), cfg)
-		mygo.RunOnMain(func() {
-			a.acceptConfiguration(cfg, err)
-			if len(a.configurationSaves) > 0 {
-				a.writeConfiguration()
-			}
-		})
-	}()
-}
-
-func (a *application) acceptConfiguration(cfg vm.Config, err error) {
-	save := a.configurationSaves[0]
-	a.configurationSaves = a.configurationSaves[1:]
-	if err == nil {
-		a.config = cfg
-	} else if !slices.ContainsFunc(a.config.Machines, func(machine vm.Machine) bool { return machine.ID == save.id }) {
-		for _, machine := range cfg.Machines {
-			if machine.ID == save.id {
-				err = fmt.Errorf("配置保存失败；磁盘保留在 %s: %w", vm.DiskPath(a.root, machine), err)
-				break
-			}
-		}
-	}
-	if save.finalize != nil {
-		save.finalize()
-	}
-	a.finishOperation(save.id, save.label, err, save.done)
 }

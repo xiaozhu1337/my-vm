@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 	"slices"
 )
 

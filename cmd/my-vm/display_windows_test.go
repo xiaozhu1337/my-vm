@@ -54,7 +54,7 @@ func TestGlobalMitigationsCheckbox(t *testing.T) {
 			t.Fatal("global setting not visible")
 		}
 		click(t, tt, "启用侧通道缓解")
-		if a.config.SideChannelMitigations != enabled || len(a.configurationSaves) != 0 {
+		if a.config.SideChannelMitigations != enabled || len(a.operations) != 0 {
 			t.Fatal("busy setting was changed")
 		}
 	}

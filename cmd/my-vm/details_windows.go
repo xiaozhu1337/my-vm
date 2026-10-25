@@ -7,7 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func (a *application) details(c *ui.Context) {
@@ -103,29 +103,30 @@ func (a *application) machineMenu(menu *ui.Menu, m vm.Machine, state string) {
 	menu.Item(m.Name).Disabled(true)
 	menu.Separator()
 	if menu.Item("启动虚拟机").Disabled(blocked || !off || !hcs).Chosen() {
-		dir := a.config.QEMUDir
 		if a.selected == m.ID {
 			a.resetSnapshots()
 		}
 		a.run(m.ID, "启动虚拟机「"+m.Name+"」", func() error {
-			if err := a.manager.Start(dir, m); err != nil {
+			if err := a.action(vm.Request{Action: "start", VM: m.ID}); err != nil {
 				return err
 			}
-			return a.manager.ShowDisplay(m.ID)
+			return a.showDisplay(m.ID, false, true)
 		}, nil)
 	}
 	if menu.Item("打开画面").Disabled(blocked || off || !hcs).Chosen() {
-		a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.manager.ShowDisplay(m.ID) }, nil)
+		a.run(m.ID, "打开客户机画面「"+m.Name+"」", func() error { return a.showDisplay(m.ID, false, true) }, nil)
 	}
 	pauseLabel, pauseCommand := "暂停", "stop"
 	if paused {
 		pauseLabel, pauseCommand = "继续运行", "cont"
 	}
 	if menu.Item(pauseLabel).Disabled(blocked || off || !hcs).Chosen() {
-		a.run(m.ID, pauseLabel+"「"+m.Name+"」", func() error { return a.manager.Control(m.ID, pauseCommand) }, nil)
+		a.run(m.ID, pauseLabel+"「"+m.Name+"」", func() error {
+			return a.action(vm.Request{Action: map[string]string{"stop": "pause", "cont": "resume"}[pauseCommand], VM: m.ID})
+		}, nil)
 	}
 	if menu.Item("正常关机").Disabled(blocked || off || paused || !hcs).Chosen() {
-		a.run(m.ID, "发送关机请求「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "system_powerdown") }, func() {
+		a.run(m.ID, "发送关机请求「"+m.Name+"」", func() error { return a.action(vm.Request{Action: "stop", VM: m.ID}) }, func() {
 			a.message = "已发送关机请求，等待客户机退出；无响应时可在虚拟机右键菜单中强制断电。"
 		})
 	}
@@ -153,10 +154,10 @@ func (a *application) machineMenu(menu *ui.Menu, m vm.Machine, state string) {
 	}
 	menu.Separator()
 	if menu.Item("基础控制台（安装与维护）").Disabled(blocked || off || !hcs).Chosen() {
-		a.run(m.ID, "打开基础控制台「"+m.Name+"」", func() error { return a.manager.ShowDisplayMode(m.ID, false) }, nil)
+		a.run(m.ID, "打开基础控制台「"+m.Name+"」", func() error { return a.showDisplay(m.ID, false, false) }, nil)
 	}
 	if menu.Item("强制断电").Disabled(blocked || off || !hcs).Chosen() && a.confirm("强制断电", "关闭「"+m.Name+"」？", "未保存的数据可能丢失，建议优先使用正常关机。") {
-		a.run(m.ID, "强制断电「"+m.Name+"」", func() error { return a.manager.Control(m.ID, "kill") }, nil)
+		a.run(m.ID, "强制断电「"+m.Name+"」", func() error { return a.action(vm.Request{Action: "kill", VM: m.ID}) }, nil)
 	}
 	if menu.Item("从列表移除").Disabled(blocked || editing || !off).Chosen() {
 		a.remove(m)

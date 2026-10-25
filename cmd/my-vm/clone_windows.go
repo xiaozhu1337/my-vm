@@ -5,7 +5,7 @@ package main
 import (
 	"strings"
 
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func (a *application) beginClone(source vm.Machine) {
@@ -30,7 +30,7 @@ func (a *application) saveClone(source, target vm.Machine) {
 		return
 	}
 	a.runDisk("复制虚拟机", source, target.ID, func(progress func(int64, int64)) error {
-		return a.manager.Clone(source, target, progress)
+		return a.action(vm.Request{Action: "clone", VM: source.ID, Machine: &target})
 	}, func() { a.finishClone(target) })
 	if a.diskJobs[source.ID] != nil {
 		a.page = ""
@@ -39,14 +39,6 @@ func (a *application) saveClone(source, target vm.Machine) {
 }
 
 func (a *application) finishClone(target vm.Machine) {
-	a.queueConfiguration(configurationSave{id: target.ID, label: "登记虚拟机副本", update: func(cfg *vm.Config) error {
-		for _, existing := range cfg.Machines {
-			if strings.EqualFold(existing.Name, target.Name) {
-				target.Name = vm.NewClone(target, cfg.Machines).Name
-				break
-			}
-		}
-		cfg.Machines = append(cfg.Machines, target)
-		return nil
-	}})
+	a.selected = target.ID
+	a.resetSnapshots()
 }

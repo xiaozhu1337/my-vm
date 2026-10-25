@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,16 +17,13 @@ import (
 )
 
 type session struct {
-	shares           *sharing.Service
-	console          *exec.Cmd
-	consoleEnhanced  bool
-	consoleAutomatic bool
-	system           *hcs.System
-	endpoints        []*hcs.Endpoint
-	paused           bool
-	runtimeID        string
-	machine          Machine
-	disk             string
+	shares    *sharing.Service
+	system    *hcs.System
+	endpoints []*hcs.Endpoint
+	paused    bool
+	runtimeID string
+	machine   Machine
+	disk      string
 }
 
 type Manager struct {
@@ -213,7 +209,7 @@ func (m *Manager) start(machine Machine) error {
 		}
 	}
 	// Status reporting also needs this VM-bound listener when no folders are shared.
-	s.shares, err = sharing.Start(s.runtimeID, machine.Shares, m.Log, saveLogin)
+	s.shares, err = sharing.Start(s.runtimeID, sharedFolders(machine.Shares), m.Log, saveLogin)
 	if err != nil {
 		return fmt.Errorf("启动客户机回传通道失败: %w", err)
 	}
@@ -235,11 +231,7 @@ func (m *Manager) watch(id string, s *session) {
 		return
 	}
 	delete(m.sessions, id)
-	console := s.console
 	m.mu.Unlock()
-	if console != nil {
-		_ = console.Process.Kill()
-	}
 	if s.shares != nil {
 		_ = s.shares.Close()
 	}

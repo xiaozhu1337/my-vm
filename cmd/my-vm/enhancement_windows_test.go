@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func TestEnhancementDiscMatchesGuestSystem(t *testing.T) {

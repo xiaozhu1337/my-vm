@@ -320,7 +320,6 @@ func (m *Manager) restartSnapshotSession(previous *session) error {
 }
 
 func (m *Manager) restoreSnapshotSessionState(previous *session) error {
-	defer m.reopenSnapshotDisplay(previous)
 	if !previous.paused {
 		return nil
 	}
@@ -344,9 +343,6 @@ func (m *Manager) stopSnapshotSession(id string, s *session) error {
 	m.mu.Lock()
 	delete(m.sessions, id)
 	m.mu.Unlock()
-	if s.console != nil {
-		_ = s.console.Process.Kill()
-	}
 	if s.shares != nil {
 		_ = s.shares.Close()
 	}
@@ -355,12 +351,4 @@ func (m *Manager) stopSnapshotSession(id string, s *session) error {
 		fmt.Fprintln(m.Log, err)
 	}
 	return nil
-}
-func (m *Manager) reopenSnapshotDisplay(previous *session) {
-	if previous.console == nil {
-		return
-	}
-	if err := m.showDisplayLocked(previous.machine.ID, previous.consoleEnhanced, previous.consoleAutomatic); err != nil && m.Log != nil {
-		fmt.Fprintln(m.Log, "快照恢复后重新打开画面失败:", err)
-	}
 }

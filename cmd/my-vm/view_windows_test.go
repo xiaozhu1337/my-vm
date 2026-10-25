@@ -3,18 +3,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func testApplication(t *testing.T, count int) *application {
 	t.Helper()
 	a := &application{root: t.TempDir()}
-	a.manager = vm.NewManager(a.root, nil)
 	for i := range count {
 		m := vm.NewMachine()
 		m.Name = fmt.Sprintf("Workstation %02d", i+1)
@@ -23,8 +26,24 @@ func testApplication(t *testing.T, count int) *application {
 	if count > 0 {
 		a.selected = a.config.Machines[0].ID
 	}
+	if err := vm.Save(filepath.Join(a.root, "library.yaml"), a.config); err != nil {
+		t.Fatal(err)
+	}
+	service := vm.NewService(a.root, nil)
+	a.manager = vm.NewClient(&http.Client{Transport: guiTestTransport(func(request *http.Request) (*http.Response, error) {
+		response := httptest.NewRecorder()
+		service.ServeHTTP(response, request)
+		return response.Result(), nil
+	})})
+	if err := a.manager.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	return a
 }
+
+type guiTestTransport func(*http.Request) (*http.Response, error)
+
+func (f guiTestTransport) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
 func testView(a *application, width, height int) *ui.Tester {
 	return ui.NewTester(func(c *ui.Context) {
@@ -144,7 +163,7 @@ func TestGlobalNetworkMutationGates(t *testing.T) {
 	}
 	a.edit(a.config.Machines[0], false)
 	a.saveDraft()
-	if !a.messageError || len(a.configurationSaves) > 0 {
+	if !a.messageError || a.operations[a.selected] != "" {
 		t.Fatal("saved config during network mutation")
 	}
 }

@@ -5,7 +5,7 @@ package main
 import (
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func (a *application) memoryPage(c *ui.Context) {
@@ -41,7 +41,7 @@ func (a *application) memoryCard(c *ui.Context, m vm.Machine, state string) {
 			components.NumberInput(c, &a.runtimeMemory, 256, 1048576, 256).Label("运行内存 MiB").Width(220)
 			if button(c, "应用内存", state == "运行中" && !a.diskBusy(m.ID)) {
 				size := int(a.runtimeMemory)
-				a.run(m.ID, "调整运行内存「"+m.Name+"」", func() error { return a.manager.SetMemory(m.ID, size) }, nil)
+				a.run(m.ID, "调整运行内存「"+m.Name+"」", func() error { return a.action(vm.Request{Action: "memory-set", VM: m.ID, Size: size}) }, nil)
 			}
 		})
 	})

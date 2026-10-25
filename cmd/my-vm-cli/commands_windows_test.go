@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"my-vm/internal/guestops"
+	guestops "my-vm/library"
 )
 
 type testTransport func(*http.Request) (*http.Response, error)
@@ -29,7 +29,7 @@ func TestGuestCommandAndBinaryCopies(t *testing.T) {
 	}
 	var output, stderr bytes.Buffer
 	commands := &commands{ctx: context.Background(), stdout: &output, stderr: &stderr, timeout: 60}
-	commands.client = &http.Client{Transport: testTransport(func(request *http.Request) (*http.Response, error) {
+	commands.client = guestops.NewClient(&http.Client{Transport: testTransport(func(request *http.Request) (*http.Response, error) {
 		response := httptest.NewRecorder()
 		if request.URL.Query().Get("vm") != "VM" {
 			t.Fatal(request.URL)
@@ -43,7 +43,7 @@ func TestGuestCommandAndBinaryCopies(t *testing.T) {
 			if len(command.Args) != 3 || command.Args[0] != "program" || command.Args[1] != "space argument" || command.Args[2] != "literal$()" {
 				t.Fatal(command.Args)
 			}
-			json.NewEncoder(response).Encode(guestops.Result{ExitCode: 7, Stdout: []byte("out"), Stderr: []byte("err")})
+			json.NewEncoder(response).Encode(guestops.CommandResult{ExitCode: 7, Stdout: []byte("out"), Stderr: []byte("err")})
 		case "/v1/guest/file":
 			if request.URL.Query().Get("path") != `C:\guest file.bin` {
 				t.Fatal(request.URL)
@@ -61,7 +61,7 @@ func TestGuestCommandAndBinaryCopies(t *testing.T) {
 			t.Fatal(request.URL)
 		}
 		return response.Result(), nil
-	})}
+	})})
 	if code, err := commands.execute([]string{"exec", "VM", "program", "space argument", "literal$()"}); err != nil || code != 7 || output.String() != "out" || stderr.String() != "err" {
 		t.Fatal(code, err, output.String(), stderr.String())
 	}

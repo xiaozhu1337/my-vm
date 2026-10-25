@@ -3,67 +3,40 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
-	"my-vm/internal/hcs"
-	"my-vm/internal/networkmgr"
-	"my-vm/internal/vm"
+
+	vm "my-vm/library"
 )
 
-type hostAdapter struct {
-	Name, MAC, Addresses, State string
-	MTU                         int
-}
+type hostAdapter = vm.HostAdapter
 
-func readHostAdapters() ([]hostAdapter, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, err
-	}
-	var adapters []hostAdapter
-	for _, adapter := range interfaces {
-		addresses, err := adapter.Addrs()
-		if err != nil {
-			return nil, err
-		}
-		var values []string
-		for _, address := range addresses {
-			values = append(values, address.String())
-		}
-		state := "未连接"
-		if adapter.Flags&net.FlagUp != 0 {
-			state = "已启用"
-		}
-		adapters = append(adapters, hostAdapter{Name: adapter.Name, MAC: adapter.HardwareAddr.String(), Addresses: strings.Join(values, ", "), State: state, MTU: adapter.MTU})
-	}
-	return adapters, nil
-}
 func (a *application) refreshHostNetworks() {
-	var networks []networkmgr.Network
-	var records []networkmgr.Record
+	var networks []vm.Network
+	var records []vm.NetworkRecord
 	var adapters []hostAdapter
 	a.run("host-networks", "读取宿主网络", func() error {
 		var err error
-		networks, records, err = networkmgr.New(a.root).List()
+		networks, records, err = a.manager.HostNetworks(context.Background())
 		if err != nil {
 			return err
 		}
-		adapters, err = readHostAdapters()
+		adapters, err = a.manager.HostAdapters(context.Background())
 		return err
 	}, func() {
 		a.networkDetails, a.managedNetworks, a.hostAdapters = networks, records, adapters
 		a.networks = nil
 		for _, n := range networks {
-			a.networks = append(a.networks, hcs.Network{ID: n.ID, Name: n.Name, Type: n.Type})
+			a.networks = append(a.networks, vm.Switch{ID: n.ID, Name: n.Name, Type: n.Type})
 		}
 	})
 }
 func (a *application) networkMutationAllowed() bool {
-	return !a.busy && !a.closing && a.loadError == nil && len(a.operations) == 0 && len(a.diskJobs) == 0 && len(a.externalJobs) == 0 && len(a.configurationSaves) == 0
+	return !a.busy && !a.closing && a.loadError == nil && len(a.operations) == 0 && len(a.diskJobs) == 0 && len(a.externalJobs) == 0
 }
 func (a *application) networkReferences() []string {
 	var ids []string
@@ -79,7 +52,7 @@ func (a *application) networkReferences() []string {
 	}
 	return ids
 }
-func (a *application) deleteHostNetwork(record networkmgr.Record) {
+func (a *application) deleteHostNetwork(record vm.NetworkRecord) {
 	if !a.networkMutationAllowed() {
 		return
 	}
@@ -92,8 +65,7 @@ func (a *application) deleteHostNetwork(record networkmgr.Record) {
 	if !a.confirm("删除自定义网络", "删除「"+record.Name+"」？", "仅删除此程序登记且没有端点的 NAT 网络；系统默认交换机、WSL 和物理网卡不会被修改。") {
 		return
 	}
-	references := a.networkReferences()
-	a.run("host-network-change", "删除自定义网络", func() error { return networkmgr.New(a.root).Delete(record.ID, references) }, a.refreshHostNetworks)
+	a.run("host-network-change", "删除自定义网络", func() error { return a.action(vm.Request{Action: "network-delete", Name: record.ID}) }, a.refreshHostNetworks)
 }
 func (a *application) settings(c *ui.Context) {
 	pageHeading(c, "全局设置", "管理宿主网络、虚拟交换机和存储位置。")
@@ -145,9 +117,8 @@ func (a *application) settings(c *ui.Context) {
 	})
 }
 func (a *application) saveSideChannelMitigations(enabled bool) {
-	a.runConfig("global-settings", "保存侧通道缓解设置", func() error { return nil }, func(cfg *vm.Config) error {
-		cfg.SideChannelMitigations = enabled
-		return nil
+	a.run("global-settings", "保存侧通道缓解设置", func() error {
+		return a.action(vm.Request{Action: "settings-update", Enabled: &enabled})
 	}, nil)
 }
 
@@ -206,7 +177,7 @@ func (a *application) globalNetworks(c *ui.Context) {
 		}
 		if action(c, "创建 NAT 网络", a.networkMutationAllowed(), components.ButtonPrimary) {
 			name, cidr := strings.TrimSpace(a.networkName), strings.TrimSpace(a.networkCIDR)
-			a.run("host-network-change", "创建自定义 NAT 网络", func() error { return networkmgr.New(a.root).Create(name, cidr) }, func() { a.networkName = ""; a.refreshHostNetworks() })
+			a.run("host-network-change", "创建自定义 NAT 网络", func() error { return a.action(vm.Request{Action: "network-create", Name: name, CIDR: cidr}) }, func() { a.networkName = ""; a.refreshHostNetworks() })
 		}
 	})
 }

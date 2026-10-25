@@ -91,11 +91,13 @@ Windows 专用盘会排除 Linux 库、仅宿主使用的内核驱动、安装�
 
 ## 命令行
 
-保持管理器运行，在解压目录使用 CLI。虚拟机名称或 ID 可通过 `list` 查询：
+在解压目录以管理员权限运行 CLI，无需打开 GUI。GUI 和 CLI 共用 `my-vm/library` 公共接口，并自动连接同一个后台核心服务。默认输出 JSON，也支持 `--format yaml`。虚拟机名称或 ID 可通过 `list` 查询：
 
 ```text
+my-vm-cli.exe --format yaml template > "C:\Work\machine.yaml"
+my-vm-cli.exe create "C:\Work\machine.yaml"
 my-vm-cli.exe list
-my-vm-cli.exe start "Ubuntu Desktop"
+my-vm-cli.exe --wait start "Ubuntu Desktop"
 my-vm-cli.exe snapshot create "Ubuntu Desktop" before-update
 my-vm-cli.exe snapshot list "Ubuntu Desktop"
 my-vm-cli.exe snapshot restore "Ubuntu Desktop" before-update
@@ -105,7 +107,7 @@ my-vm-cli.exe copy-to "Ubuntu Desktop" "C:\Work\hello.txt" /home/user/hello.txt
 my-vm-cli.exe --help
 ```
 
-客户机命令和文件传输需要已安装并运行增强工具；快照与普通启停操作由宿主后端完成。
+客户机命令和文件传输需要已安装并运行增强工具；快照与普通启停操作由宿主后端完成。CLI 还覆盖配置、独立复制、运行内存、增强光盘、网络及全局设置。完整用法见[命令行文档](docs/command-line.md)，库接口及职责边界见[架构文档](docs/architecture.md)。
 
 ## 从源码构建
 
@@ -135,7 +137,7 @@ mise exec go@1.27.2 -- go vet ./...
 
 YAML 配置保存在 `%APPDATA%\my-vm`；错误异步写入程序同目录的 `logs\my-vm.log`。从列表移除虚拟机保留其磁盘和快照。
 
-当前只支持 **Windows x64 宿主机**，暂不提供内存快照、无人值守系统安装、qcow2 自动转换或通用 GPU 兼容保证。管理器异常退出会终止其 HCS 虚拟机，因此应正常关闭客户机后再退出宿主会话。
+当前只支持 **Windows x64 宿主机**，暂不提供内存快照、无人值守系统安装、qcow2 自动转换或通用 GPU 兼容保证。后台核心持有 HCS 句柄，GUI/CLI 客户端退出不结束核心服务；核心服务异常退出会终止其 HCS 虚拟机，因此停止服务或退出宿主会话前应先正常关闭客户机。
 
 ## Todo
 

@@ -10,7 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
 	"my-vm/assets"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 var projectIcon, projectIconError = ui.DecodeBitmap(assets.Icon)

@@ -1,6 +1,7 @@
 package sharing
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,6 +9,13 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestGuestShareMetadataHidesHostPaths(t *testing.T) {
+	data, err := json.Marshal([]Share{{Name: "Work", Path: t.TempDir(), ReadOnly: true}})
+	if err != nil || strings.Contains(string(data), "path") || !strings.Contains(string(data), `"name":"Work"`) {
+		t.Fatal("guest metadata exposed host configuration", string(data), err)
+	}
+}
 
 func TestRootedShares(t *testing.T) {
 	root := t.TempDir()

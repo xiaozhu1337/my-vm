@@ -7,7 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func field(c *ui.Context, label string, value *string) {

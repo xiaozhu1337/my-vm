@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -82,7 +83,8 @@ func Client(ctx context.Context) (*http.Client, error) {
 		if e != nil {
 			return nil, e
 		}
-		manager := exec.Command(filepath.Join(filepath.Dir(executable), "my-vm.exe"))
+		manager := exec.Command(filepath.Join(filepath.Dir(executable), "my-vm-cli.exe"), "serve")
+		manager.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 		if e = manager.Start(); e != nil {
 			return nil, fmt.Errorf("启动管理器: %w", e)
 		}
@@ -109,7 +111,7 @@ func Client(ctx context.Context) (*http.Client, error) {
 	return ExistingClient()
 }
 
-// ExistingClient never starts a GUI; background console subscriptions reconnect independently.
+// ExistingClient never starts a process; background subscriptions reconnect independently.
 func ExistingClient() (*http.Client, error) {
 	name, _, err := pipeName()
 	if err != nil {

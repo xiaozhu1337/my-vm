@@ -1,5 +1,7 @@
 /dist/
-/docs/
+/docs/*
+!/docs/architecture.md
+!/docs/command-line.md
 /__tmp/
 /logs/
 /cmd/my-vm/rsrc_windows_amd64.syso

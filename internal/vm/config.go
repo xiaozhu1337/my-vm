@@ -19,47 +19,69 @@ import (
 )
 
 type Machine struct {
-	GuestOS         string           `yaml:"guest_os"`
-	LinuxDesktop    string           `yaml:"linux_desktop,omitempty"`
-	DynamicMemory   bool             `yaml:"dynamic_memory"`
-	GPUShared       bool             `yaml:"gpu_shared"`
-	Backend         string           `yaml:"backend"`
-	SwitchID        string           `yaml:"switch_id"`
-	Clipboard       bool             `yaml:"clipboard"`
-	Shares          []Share          `yaml:"shares,omitempty"`
-	ID              string           `yaml:"id"`
-	Name            string           `yaml:"name"`
-	CPUs            int              `yaml:"cpus"`
-	MemoryMiB       int              `yaml:"memory_mib"`
-	DiskGiB         int              `yaml:"disk_gib"`
-	ISO             string           `yaml:"iso"`
-	DriverISO       string           `yaml:"driver_iso"`
-	Display         string           `yaml:"display"`
-	Network         string           `yaml:"network"`
-	TAP             string           `yaml:"tap"`
-	NetworkAdapters []NetworkAdapter `yaml:"network_adapters,omitempty"`
-	COMPorts        []COMPort        `yaml:"com_ports,omitempty"`
-	Accelerator     string           `yaml:"accelerator"`
+	GuestOS         string           `yaml:"guest_os" json:"guest_os"`
+	LinuxDesktop    string           `yaml:"linux_desktop,omitempty" json:"linux_desktop,omitempty"`
+	DynamicMemory   bool             `yaml:"dynamic_memory" json:"dynamic_memory"`
+	GPUShared       bool             `yaml:"gpu_shared" json:"gpu_shared"`
+	Backend         string           `yaml:"backend" json:"backend"`
+	SwitchID        string           `yaml:"switch_id" json:"switch_id"`
+	Clipboard       bool             `yaml:"clipboard" json:"clipboard"`
+	Shares          []Share          `yaml:"shares,omitempty" json:"shares,omitempty"`
+	ID              string           `yaml:"id" json:"id"`
+	Name            string           `yaml:"name" json:"name"`
+	CPUs            int              `yaml:"cpus" json:"cpus"`
+	MemoryMiB       int              `yaml:"memory_mib" json:"memory_mib"`
+	DiskGiB         int              `yaml:"disk_gib" json:"disk_gib"`
+	ISO             string           `yaml:"iso" json:"iso"`
+	DriverISO       string           `yaml:"driver_iso" json:"driver_iso"`
+	Display         string           `yaml:"display" json:"display"`
+	Network         string           `yaml:"network" json:"network"`
+	TAP             string           `yaml:"tap" json:"tap"`
+	NetworkAdapters []NetworkAdapter `yaml:"network_adapters,omitempty" json:"network_adapters,omitempty"`
+	COMPorts        []COMPort        `yaml:"com_ports,omitempty" json:"com_ports,omitempty"`
+	Accelerator     string           `yaml:"accelerator" json:"accelerator"`
 }
 
 // NetworkAdapter describes an additional NIC; Network and SwitchID remain the primary NIC.
 type NetworkAdapter struct {
-	Network    string `yaml:"network"`
-	SwitchID   string `yaml:"switch_id"`
-	MACAddress string `yaml:"mac_address,omitempty"`
+	Network    string `yaml:"network" json:"network"`
+	SwitchID   string `yaml:"switch_id" json:"switch_id"`
+	MACAddress string `yaml:"mac_address,omitempty" json:"mac_address,omitempty"`
 }
 
 type COMPort struct {
-	Number int    `yaml:"number"`
-	Pipe   string `yaml:"pipe"`
+	Number int    `yaml:"number" json:"number"`
+	Pipe   string `yaml:"pipe" json:"pipe"`
 }
 
-type Share = sharing.Share
+// Share is the management configuration; the guest-facing sharing type hides Path.
+type Share struct {
+	Name     string `yaml:"name" json:"name"`
+	Path     string `yaml:"path" json:"path"`
+	ReadOnly bool   `yaml:"read_only" json:"read_only"`
+}
+
+func (s *Share) UnmarshalYAML(node *yaml.Node) error {
+	var value sharing.Share
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	*s = Share(value)
+	return nil
+}
+
+func sharedFolders(shares []Share) []sharing.Share {
+	result := make([]sharing.Share, len(shares))
+	for i, share := range shares {
+		result[i] = sharing.Share(share)
+	}
+	return result
+}
 
 type Config struct {
-	SideChannelMitigations bool      `yaml:"side_channel_mitigations"`
-	QEMUDir                string    `yaml:"qemu_dir"`
-	Machines               []Machine `yaml:"machines"`
+	SideChannelMitigations bool      `yaml:"side_channel_mitigations" json:"side_channel_mitigations"`
+	QEMUDir                string    `yaml:"qemu_dir" json:"qemu_dir"`
+	Machines               []Machine `yaml:"machines" json:"machines"`
 }
 
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -179,7 +201,7 @@ func (m Machine) enabledNetworkAdapters() []NetworkAdapter {
 	return adapters
 }
 
-func ValidateShares(shares []Share) error { return sharing.Validate(shares) }
+func ValidateShares(shares []Share) error { return sharing.Validate(sharedFolders(shares)) }
 
 func Load(path string) (Config, error) {
 	cfg := Config{}

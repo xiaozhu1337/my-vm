@@ -3,25 +3,27 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo"
-	"my-vm/internal/hcs"
+
 	"my-vm/internal/logging"
-	"my-vm/internal/networkmgr"
-	"my-vm/internal/vm"
+
+	vm "my-vm/library"
 )
 
 type application struct {
 	runtimeMemory                           float64
 	runtimeMemoryID                         string
-	networks                                []hcs.Network
+	networks                                []vm.Switch
 	root                                    string
 	logger                                  *logging.Logger
-	manager                                 *vm.Manager
+	manager                                 *vm.Client
 	window                                  *mygo.Window
 	config                                  vm.Config
 	loadError                               error
@@ -29,20 +31,20 @@ type application struct {
 	busy, messageError                      bool
 	closing, closeReady                     bool
 	operations                              map[string]string
-	configurationSaves                      []configurationSave
-	preparedMedia                           map[string]bool
+	displayLock                             sync.Mutex
+	displays                                map[string]*displayWindow
 	diskJobs                                map[string]*diskJob
 	externalJobs                            map[string]bool
 	editVersion                             int
 	deviceOnly                              bool
 	settingsTab                             int
 	networkName, networkCIDR                string
-	managedNetworks                         []networkmgr.Record
+	managedNetworks                         []vm.NetworkRecord
 	hostAdapters                            []hostAdapter
-	networkDetails                          []networkmgr.Network
+	networkDetails                          []vm.Network
 	cloneSource                             *vm.Machine
 	listPage, filter, detailTab             int
-	draft, savedDraft                       vm.Machine
+	draft, savedDraft, persistedDraft       vm.Machine
 	creating                                bool
 	cpu, memory, disk                       float64
 	snapshots                               []vm.Snapshot
@@ -80,6 +82,7 @@ func (a *application) selectMachine(m vm.Machine, page string, tab int) bool {
 }
 
 func (a *application) edit(m vm.Machine, creating bool) {
+	a.persistedDraft = m
 	a.editVersion++
 	a.cloneSource = nil
 	a.deviceOnly = false
@@ -131,31 +134,24 @@ func (a *application) saveDraft() {
 		return
 	}
 	creating, version := a.creating, a.editVersion
-	dir := a.config.QEMUDir
-	a.runConfig(m.ID, "保存虚拟机「"+m.Name+"」", func() error {
-		if creating {
-			return a.manager.CreateDisk(dir, m)
+	original := a.persistedDraft
+	action := "update"
+	if creating {
+		action = "create"
+	}
+	a.run(m.ID, "保存虚拟机「"+m.Name+"」", func() error {
+		request := vm.Request{Action: action, VM: m.ID, Machine: &m}
+		if !creating {
+			request.Expected = &original
 		}
-		return nil
-	}, func(cfg *vm.Config) error {
-		if creating {
-			cfg.Machines = append(cfg.Machines, m)
-			return nil
-		}
-		for i := range cfg.Machines {
-			if cfg.Machines[i].ID == m.ID {
-				cfg.Machines[i] = m
-				return nil
-			}
-		}
-		return fmt.Errorf("虚拟机已从配置中移除；磁盘保留在 %s", vm.DiskPath(a.root, m))
+		return a.action(request)
 	}, func() { a.finishEditing(m, version) })
 }
 
 func (a *application) finishEditing(machine vm.Machine, version int) {
 	if a.page == "edit" && a.draft.ID == machine.ID && a.editVersion == version {
 		if a.busy {
-			a.draft, a.savedDraft, a.creating = machine, machine, false
+			a.draft, a.savedDraft, a.persistedDraft, a.creating = machine, machine, machine, false
 			a.draft.Shares = slices.Clone(machine.Shares)
 			a.draft.NetworkAdapters = slices.Clone(machine.NetworkAdapters)
 			a.draft.COMPorts = slices.Clone(machine.COMPorts)
@@ -205,9 +201,8 @@ func (a *application) remove(m vm.Machine) {
 	if !a.confirm("从列表移除", "从列表移除「"+m.Name+"」？", "磁盘和快照将保留在 "+vm.DiskPath(a.root, m)) {
 		return
 	}
-	a.runConfig(m.ID, "移除虚拟机「"+m.Name+"」", func() error { return nil }, func(cfg *vm.Config) error {
-		cfg.Machines = slices.DeleteFunc(cfg.Machines, func(item vm.Machine) bool { return item.ID == m.ID })
-		return nil
+	a.run(m.ID, "移除虚拟机「"+m.Name+"」", func() error {
+		return a.action(vm.Request{Action: "remove", VM: m.ID})
 	}, func() {
 		if a.selected != m.ID {
 			return
@@ -243,8 +238,8 @@ func (a *application) refreshSnapshots(m vm.Machine) {
 	}
 	request := a.snapshotRequest
 	var snapshots []vm.Snapshot
-	dir := a.config.QEMUDir
-	a.run(m.ID, "读取快照「"+m.Name+"」", func() error { var err error; snapshots, err = a.manager.Snapshots(dir, m); return err }, func() {
+	ctx := context.Background()
+	a.run(m.ID, "读取快照「"+m.Name+"」", func() error { var err error; snapshots, err = a.manager.Snapshots(ctx, m.ID); return err }, func() {
 		a.acceptSnapshots(m.ID, request, snapshots)
 	})
 }
@@ -258,14 +253,14 @@ func (a *application) snapshot(m vm.Machine, action, name string) {
 		return
 	}
 	request := a.snapshotRequest
-	dir := a.config.QEMUDir
+	ctx := context.Background()
 	var snapshots []vm.Snapshot
 	a.runDisk(label, m, "", func(progress func(int64, int64)) error {
-		if err := a.manager.Snapshot(dir, m, action, name, progress); err != nil {
+		if err := a.action(vm.Request{Action: map[string]string{"-c": "snapshot-create", "-a": "snapshot-restore", "-d": "snapshot-delete"}[action], VM: m.ID, Name: name}); err != nil {
 			return err
 		}
 		var err error
-		snapshots, err = a.manager.Snapshots(dir, m)
+		snapshots, err = a.manager.Snapshots(ctx, m.ID)
 		return err
 	}, func() {
 		if a.acceptSnapshots(m.ID, request, snapshots) && action == "-c" {

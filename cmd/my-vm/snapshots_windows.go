@@ -9,7 +9,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {

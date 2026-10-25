@@ -91,11 +91,13 @@ Snapshots contain **disk state**, not RAM or UEFI variables. Live creation is cr
 
 ## Command line
 
-Keep the manager open, then run the CLI from the extracted folder. Use a VM name or ID from `list`:
+Run the CLI as administrator from the extracted folder; it works without opening the GUI. GUI and CLI share the public `my-vm/library` API and automatically connect to the same background core service. Output defaults to JSON, with `--format yaml` available. Use a VM name or ID from `list`:
 
 ```text
+my-vm-cli.exe --format yaml template > "C:\Work\machine.yaml"
+my-vm-cli.exe create "C:\Work\machine.yaml"
 my-vm-cli.exe list
-my-vm-cli.exe start "Ubuntu Desktop"
+my-vm-cli.exe --wait start "Ubuntu Desktop"
 my-vm-cli.exe snapshot create "Ubuntu Desktop" before-update
 my-vm-cli.exe snapshot list "Ubuntu Desktop"
 my-vm-cli.exe snapshot restore "Ubuntu Desktop" before-update
@@ -105,7 +107,7 @@ my-vm-cli.exe copy-to "Ubuntu Desktop" "C:\Work\hello.txt" /home/user/hello.txt
 my-vm-cli.exe --help
 ```
 
-Guest commands and file transfer require installed, running guest tools. Snapshots and ordinary VM control use the host backend.
+Guest commands and file transfer require installed, running guest tools. Snapshots and ordinary VM control use the host backend. The CLI also covers configuration, cloning, runtime memory, enhancement media, networks, and global settings. See the [CLI reference](docs/command-line.md) and [library architecture](docs/architecture.md).
 
 ## Build from source
 
@@ -135,7 +137,7 @@ mise exec go@1.27.2 -- go vet ./...
 
 Configuration lives in `%APPDATA%\my-vm` as YAML. Errors are written asynchronously to `logs\my-vm.log` beside the executable. Removing a VM from the library keeps its disks and snapshots.
 
-This project currently targets **Windows x64 hosts**. It does not provide memory snapshots, unattended OS installation, automatic qcow2 conversion, or universal GPU compatibility. An abnormal manager process exit terminates its HCS VMs; shut guests down normally before closing the host session.
+This project currently targets **Windows x64 hosts**. It does not provide memory snapshots, unattended OS installation, automatic qcow2 conversion, or universal GPU compatibility. The background core owns HCS handles and survives GUI/CLI client exits. An abnormal core-service exit terminates its HCS VMs; shut guests down normally before stopping the service or closing the host session.
 
 ## Todo
 

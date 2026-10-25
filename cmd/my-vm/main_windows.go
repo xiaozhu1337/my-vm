@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/oneo-me/onevra/source/shells/plain"
 	"my-vm/assets"
 	"my-vm/internal/console"
-	"my-vm/internal/control"
 	"my-vm/internal/logging"
 	"my-vm/internal/media"
-	"my-vm/internal/vm"
+	vm "my-vm/library"
 )
 
 func main() {
@@ -62,47 +62,39 @@ func main() {
 	}
 	root := filepath.Join(base, "my-vm")
 	a := &application{root: root, logger: logger}
-	a.config, err = vm.Load(filepath.Join(root, "library.yaml"))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	a.manager, err = vm.Connect(ctx)
+	cancel()
+	if err != nil {
+		fmt.Fprintln(logger, err)
+		return
+	}
+	defer a.manager.Close()
+	a.config, err = a.refresh()
 	if err != nil {
 		a.loadError = err
 		a.messageError = true
 		a.message = err.Error()
-		_, _ = fmt.Fprintln(logger, err)
+		fmt.Fprintln(logger, err)
 	}
 	a.qemuDir = a.config.QEMUDir
-	a.manager = vm.NewManager(root, logger)
-	a.manager.Changed = func(err error) {
-		mygo.RunOnMain(func() {
-			if err != nil {
-				a.report(err)
-			}
-			if a.window != nil {
-				a.window.Invalidate()
-			}
-		})
-	}
+	pollContext, stopPolling := context.WithCancel(context.Background())
+	defer stopPolling()
+
 	if len(a.config.Machines) > 0 {
 		a.selected = a.config.Machines[0].ID
 	}
 	mygo.App.SetPath(mygo.PathUserData, root)
-	var controller *control.Server
-	defer func() {
-		if controller != nil {
-			controller.Close()
-		}
-	}()
+
 	mygo.App.WhenReady(func() {
 		shell := plain.NewShell(plain.ShellOptions{Title: "My VM", Width: 1240, Height: 860, MinWidth: 1040, MinHeight: 700, Theme: appTheme, Content: a.view})
 		a.window = shell.Window()
-		controller, err = control.Listen(a.manager, a.beginExternal, a.finishExternal)
-		if err != nil {
-			a.report(fmt.Errorf("启动命令行接口: %w", err))
-		}
+		go a.poll(pollContext)
 		if err := a.window.SetIcon(assets.Icon); err != nil {
 			a.report(err)
 		}
 		a.window.OnClose(func(e *mygo.CloseEvent) {
-			allow, shutdown := a.prepareClose(a.manager.Active(), controller != nil && controller.Active(), a.leavePage, func() bool {
+			allow, shutdown := a.prepareClose(a.manager.Active(), false, a.leavePage, func() bool {
 				return a.confirm("正常关机并退出", "仍有虚拟机在运行，是否正常关闭全部虚拟机后退出？", "暂停的虚拟机会先恢复，再正常关机。等待期间管理器保持打开，全部关机后自动退出；关机失败时不会强制断电。")
 			})
 			if !allow {
@@ -149,7 +141,10 @@ func (a *application) shutdownForExit() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		err := a.manager.ShutdownAll(ctx)
+		_, err := a.manager.Execute(ctx, vm.Request{Action: "shutdown-all"})
+		if refreshErr := a.manager.Refresh(ctx); err == nil {
+			err = refreshErr
+		}
 		mygo.RunOnMain(func() {
 			if a.finishShutdown(err, a.manager.Active()) {
 				a.window.Close()
@@ -172,4 +167,49 @@ func (a *application) finishShutdown(err error, active bool) bool {
 	// Keep new operations blocked until the final close event has been accepted.
 	a.closeReady = true
 	return true
+}
+
+func (a *application) poll(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		cfg, err := a.refresh()
+		var displayErr error
+		if err == nil {
+			displayErr = a.syncDisplays(ctx)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		mygo.RunOnMain(func() {
+			if err != nil {
+				if a.loadError == nil {
+					a.report(err)
+				}
+				a.loadError = err
+			} else {
+				if !reflect.DeepEqual(a.config, cfg) {
+					a.config = cfg
+					a.resetSnapshots()
+				}
+				a.syncJobs()
+				if displayErr != nil {
+					a.report(displayErr)
+				}
+				if a.loadError != nil {
+					a.loadError = nil
+					a.message = "已重新连接核心服务"
+					a.messageError = false
+				}
+			}
+			if a.window != nil {
+				a.window.Invalidate()
+			}
+		})
+	}
 }
