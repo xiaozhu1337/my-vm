@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	vm "my-vm/library"
@@ -405,44 +406,118 @@ func TestOverviewOnlyShowsInformation(t *testing.T) {
 	}
 }
 
+func TestSnapshotDiagramBranchesAndWorkingState(t *testing.T) {
+	for _, current := range []string{"", "a", "c"} {
+		snapshots := []vm.Snapshot{{ID: "a", Name: "baseline"}, {ID: "b", Name: "original", ParentID: "a"}, {ID: "c", Name: "new-branch", ParentID: "a"}}
+		for i := range snapshots {
+			snapshots[i].Current = snapshots[i].ID == current
+		}
+		data := snapshotDiagram(snapshots)
+		parent := current
+		if parent == "" {
+			parent = snapshotRoot
+		}
+		want := map[[2]string]bool{{snapshotRoot, "a"}: true, {"a", "b"}: true, {"a", "c"}: true, {parent, snapshotCurrent}: true}
+		if len(data.Nodes) != 5 || len(data.Edges) != len(want) {
+			t.Fatalf("lost snapshot or working node: %+v", data)
+		}
+		for _, edge := range data.Edges {
+			if !want[[2]string{edge.Source, edge.Target}] || edge.Dashed != (edge.Target == snapshotCurrent) {
+				t.Fatalf("incorrect branch or working location: %+v", edge)
+			}
+			delete(want, [2]string{edge.Source, edge.Target})
+		}
+		if len(want) != 0 {
+			t.Fatal("missing branches", want)
+		}
+	}
+	data := snapshotDiagram(nil)
+	if len(data.Nodes) != 2 || len(data.Edges) != 1 || data.Edges[0].Source != snapshotRoot || data.Edges[0].Target != snapshotCurrent {
+		t.Fatal("empty catalog lost its working location", data)
+	}
+	data = snapshotDiagram([]vm.Snapshot{{ID: "snapshot-root", Name: "snapshot-root"}, {ID: "snapshot-current", Name: "snapshot-current"}})
+	ids := map[string]bool{}
+	for _, node := range data.Nodes {
+		if ids[node.ID] {
+			t.Fatal("legacy snapshot collides with a presentation node", node.ID)
+		}
+		ids[node.ID] = true
+	}
+}
+
 func TestViewSnapshots(t *testing.T) {
 	a := testApplication(t, 1)
-	a.detailTab, a.snapshotsLoaded = 1, true
+	a.detailTab, a.snapshotsLoaded, a.snapshotSelected = 1, true, snapshotCurrent
 	for i := range 11 {
-		a.snapshots = append(a.snapshots, vm.Snapshot{ID: fmt.Sprint(i + 1), Name: fmt.Sprintf("checkpoint-%02d", i+1), DateSeconds: 1700000000})
+		a.snapshots = append(a.snapshots, vm.Snapshot{ID: fmt.Sprint(i + 1), Name: fmt.Sprintf("checkpoint-%02d", i+1), DateSeconds: 1700000000, Current: i == 10})
 	}
 	tt := testView(a, 1080, 720)
-	tt.Move(850, 500)
-	tt.Scroll(850, 500, 0, 1800)
-	click(t, tt, "下一组")
-	if a.snapshotPage != 1 || !tt.HasText("checkpoint-11") {
-		t.Fatalf("snapshot pagination failed: page=%d texts=%q", a.snapshotPage, tt.Texts())
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+	tt.Advance(100 * time.Millisecond)
+	for _, snapshot := range a.snapshots {
+		if _, _, ok := a.snapshotTree.Position(snapshot.ID); !ok || !tt.HasText(snapshot.Name) {
+			t.Fatal("snapshot missing from whole tree", snapshot.Name)
+		}
+	}
+	if !a.snapshotTree.Ready() || !tt.HasText("当前位置") || tt.HasText("下一组") {
+		t.Fatal("tree not ready or still paginated", tt.Texts())
 	}
 	a.snapshots = nil
 	tt.Frame()
 	if !tt.HasText("还没有快照") {
 		t.Fatal("loaded empty snapshots are not distinguished from unread snapshots")
 	}
+	a.resetSnapshots()
+	tt.Frame()
+	_, hasCurrent := tt.Find("当前位置")
+	if !tt.HasText("尚未读取快照") || hasCurrent {
+		t.Fatal("unread catalog fabricated a working location")
+	}
 }
 
 func TestViewRunningSnapshotControlsAndTree(t *testing.T) {
 	a := testApplication(t, 1)
-	a.snapshotName = "before-update"
+	a.snapshotName, a.snapshotsLoaded, a.snapshotSelected = "before-update", true, snapshotCurrent
 	a.snapshots = []vm.Snapshot{{ID: "1", Name: "baseline", DateSeconds: 1700000000}, {ID: "2", Name: "branch", ParentID: "1", ParentName: "baseline", Depth: 1, Current: true, DateSeconds: 1700000001}}
 	tt := ui.NewTester(func(c *ui.Context) {
 		c.SetTheme(appTheme(c))
 		a.snapshotView(c, a.config.Machines[0], false)
-	}, 700, 900)
-	for _, label := range []string{"支持运行中创建和删除差分快照", "+-- branch", "父快照：baseline", "当前分支"} {
+	}, 700, 1100)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
+	tt.Advance(100 * time.Millisecond)
+	for _, label := range []string{"branch", "当前位置", "基于快照", "支持运行中创建和删除差分快照；恢复会重启客户机，不保留内存和未保存的操作。"} {
 		if !tt.HasText(label) {
 			t.Fatal("running snapshot tree missing", label, tt.Texts())
 		}
 	}
+	for _, label := range []string{"恢复到此快照", "删除此快照"} {
+		click(t, tt, label)
+	}
+	if a.diskJobs[a.selected] != nil {
+		t.Fatal("working state accepted a saved-snapshot operation")
+	}
+	click(t, tt, "branch")
+	if a.snapshotSelected != "2" || !tt.HasText("父快照") || !tt.HasText("baseline") {
+		t.Fatal("snapshot selection did not show its details", a.snapshotSelected, tt.Texts())
+	}
+	zoom := a.snapshotTree.Zoom()
+	click(t, tt, "放大")
+	tt.Advance(100 * time.Millisecond)
+	if a.snapshotTree.Zoom() <= zoom {
+		t.Fatal("tree zoom control did not zoom")
+	}
+	click(t, tt, "定位当前")
+	if a.snapshotSelected != snapshotCurrent {
+		t.Fatal("locate current did not select the working state")
+	}
+	click(t, tt, "显示全树")
+	tt.Advance(100 * time.Millisecond)
+	click(t, tt, "branch")
 	click(t, tt, "创建快照")
 	if a.busy || a.diskJobs[a.selected] == nil {
 		t.Fatal("running snapshot control did not start a background job")
 	}
-	for _, label := range []string{"创建快照", "刷新列表", "恢复", "删除"} {
+	for _, label := range []string{"创建快照", "刷新", "恢复到此快照", "删除此快照"} {
 		click(t, tt, label)
 	}
 	if len(a.diskJobs) != 1 {
@@ -461,6 +536,19 @@ func TestViewMinimumSizeAndTheme(t *testing.T) {
 				if !ok || r.X < 0 || r.Y < 0 || r.X+r.W > 1040 || r.Y+r.H > 660 {
 					t.Fatalf("control %q outside minimum window: %v, found=%t", label, r, ok)
 				}
+			}
+			a.detailTab, a.snapshotsLoaded = 1, true
+			tt.Frame()
+			for _, label := range []string{"放大", "缩小", "显示全树", "定位当前", "刷新"} {
+				r, ok := tt.Find(label)
+				if !ok || r.X < 256 || r.Y < 0 || r.X+r.W > 1040 || r.Y+r.H > 588 {
+					t.Fatalf("snapshot control %q outside minimum window: %v, found=%t", label, r, ok)
+				}
+			}
+			tt.Move(1000, 500)
+			tt.Scroll(1000, 500, 0, 1800)
+			if r, ok := tt.Find("创建快照"); !ok || r.Y < 0 || r.Y+r.H > 588 {
+				t.Fatalf("snapshot creation unreachable by scrolling: %v, found=%t", r, ok)
 			}
 			for _, page := range []struct{ name, footer string }{{"edit", "保存更改"}, {"settings", "返回"}} {
 				a.edit(a.config.Machines[0], false)

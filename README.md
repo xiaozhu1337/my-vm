@@ -84,6 +84,8 @@ Closing a console leaves its VM running. Closing the manager offers a normal shu
 
 Snapshots contain **disk state**, not RAM or UEFI variables. Live creation is crash-consistent; it does not save a running application's memory or guarantee an application-consistent database backup.
 
+The snapshot page draws parent-child branches in a tree with zoom and pan controls. A separate current-position node marks the working state. Select a saved node to inspect, restore, or delete it; selection alone never changes the disk. To create another branch from an older snapshot, restore it first, then create a new snapshot. Existing branches remain available.
+
 - Create and delete snapshots while the guest runs. Creation switches future writes to a new differencing disk.
 - Restore restarts a running guest, keeps a paused guest paused, and leaves a powered-off guest off. Unsnapshotted changes on the current branch are discarded after confirmation.
 - Up to 16 named restore points per VM. Deleting a name retains disk layers still needed by another branch or the active disk, so space may not be reclaimed immediately.

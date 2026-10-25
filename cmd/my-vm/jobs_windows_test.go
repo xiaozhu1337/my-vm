@@ -43,7 +43,7 @@ func TestSnapshotResultsBelongToMachineAndRequest(t *testing.T) {
 	a := testApplication(t, 2)
 	first := a.selected
 	request := a.snapshotRequest
-	snapshots := []vm.Snapshot{{Name: "original"}}
+	snapshots := []vm.Snapshot{{ID: "one", Name: "original"}}
 	a.selected = a.config.Machines[1].ID
 	if a.acceptSnapshots(first, request, snapshots) || len(a.snapshots) != 0 {
 		t.Fatal("first machine result replaced another machine's list")
@@ -53,8 +53,19 @@ func TestSnapshotResultsBelongToMachineAndRequest(t *testing.T) {
 	if a.acceptSnapshots(first, request, snapshots) {
 		t.Fatal("outdated request replaced a new page")
 	}
-	if !a.acceptSnapshots(first, a.snapshotRequest, snapshots) || !a.snapshotsLoaded {
-		t.Fatal("current snapshot result rejected")
+	if !a.acceptSnapshots(first, a.snapshotRequest, snapshots) || !a.snapshotsLoaded || a.snapshotSelected != snapshotCurrent {
+		t.Fatal("current snapshot result rejected or working state not selected")
+	}
+	a.snapshotSelected = "one"
+	if !a.acceptSnapshots(first, a.snapshotRequest, snapshots) || a.snapshotSelected != "one" {
+		t.Fatal("refresh discarded a valid selection")
+	}
+	if !a.acceptSnapshots(first, a.snapshotRequest, nil) || a.snapshotSelected != snapshotCurrent {
+		t.Fatal("deleted snapshot remained selected")
+	}
+	a.resetSnapshots()
+	if a.snapshotSelected != "" || a.snapshotTree.Ready() {
+		t.Fatal("navigation retained another tree's selection or camera")
 	}
 }
 

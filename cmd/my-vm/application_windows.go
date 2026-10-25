@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/egoist/mygo"
+	"github.com/oneo-me/onevra/source/components/flow"
 
 	"my-vm/internal/logging"
 
@@ -49,8 +50,8 @@ type application struct {
 	cpu, memory, disk                       float64
 	snapshots                               []vm.Snapshot
 	snapshotsLoaded                         bool
-	snapshotName                            string
-	snapshotPage                            int
+	snapshotName, snapshotSelected          string
+	snapshotTree                            flow.State
 	snapshotRequest                         int
 }
 
@@ -220,15 +221,22 @@ func (a *application) resetSnapshots() {
 	a.snapshotRequest++
 	a.snapshots = nil
 	a.snapshotsLoaded = false
-	a.snapshotName = ""
-	a.snapshotPage = 0
+	a.snapshotName, a.snapshotSelected = "", ""
+	a.snapshotTree = flow.State{}
 }
 
 func (a *application) acceptSnapshots(id string, request int, snapshots []vm.Snapshot) bool {
 	if a.selected != id || a.snapshotRequest != request {
 		return false
 	}
-	a.snapshots, a.snapshotsLoaded, a.snapshotPage = snapshots, true, 0
+	a.snapshots, a.snapshotsLoaded = snapshots, true
+	selectedExists := a.snapshotSelected == snapshotCurrent || a.snapshotSelected == snapshotRoot
+	for _, snapshot := range snapshots {
+		selectedExists = selectedExists || snapshot.ID != "" && snapshot.ID == a.snapshotSelected
+	}
+	if !selectedExists {
+		a.snapshotSelected = snapshotCurrent
+	}
 	return true
 }
 
@@ -263,8 +271,13 @@ func (a *application) snapshot(m vm.Machine, action, name string) {
 		snapshots, err = a.manager.Snapshots(ctx, m.ID)
 		return err
 	}, func() {
-		if a.acceptSnapshots(m.ID, request, snapshots) && action == "-c" {
-			a.snapshotName = ""
+		if a.acceptSnapshots(m.ID, request, snapshots) {
+			if action == "-c" {
+				a.snapshotName = ""
+			}
+			if action == "-c" || action == "-a" {
+				a.snapshotSelected = snapshotCurrent
+			}
 		}
 	})
 }
