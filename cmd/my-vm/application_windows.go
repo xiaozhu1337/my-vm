@@ -28,6 +28,7 @@ type application struct {
 	window                                  *mygo.Window
 	config                                  vm.Config
 	loadError                               error
+	stateRevision                           uint64
 	selected, page, query, message, qemuDir string
 	busy, messageError                      bool
 	closing, closeReady                     bool

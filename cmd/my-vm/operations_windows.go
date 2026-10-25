@@ -21,11 +21,7 @@ func (a *application) action(request vm.Request) error {
 func (a *application) refresh() (vm.Config, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cfg, err := a.manager.Configuration(ctx)
-	if err == nil {
-		err = a.manager.Refresh(ctx)
-	}
-	return cfg, err
+	return a.manager.RefreshConfiguration(ctx)
 }
 
 func (a *application) beginOperation(id, label string) bool {

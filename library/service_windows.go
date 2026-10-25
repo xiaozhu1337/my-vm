@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"my-vm/internal/vm"
 )
@@ -17,24 +20,25 @@ import (
 // Service owns runtime resources and configuration. Different machines can run
 // operations concurrently; configuration commits are short and always merge latest data.
 type Service struct {
-	runtime       *vm.Manager
-	mu            sync.Mutex
-	gate          sync.RWMutex
-	locks         sync.Map
-	progress      sync.Map
-	log           io.Writer
-	mediaDir      string
-	preparedMedia map[string]bool
+	runtime        *vm.Manager
+	mu             sync.Mutex
+	gate           sync.RWMutex
+	locks          sync.Map
+	progress       sync.Map
+	log            io.Writer
+	mediaDir       string
+	preparedMedia  map[string]bool
+	cached         *Config
+	configFile     os.FileInfo
+	revision       uint64
+	guestTransport *http.Transport
 }
 
 func NewService(root string, log io.Writer) *Service {
 	if log == nil {
 		log = io.Discard
 	}
-	return &Service{runtime: vm.NewManager(root, log), log: log, preparedMedia: map[string]bool{}}
-}
-func (s *Service) config() (Config, error) {
-	return vm.Load(filepath.Join(s.runtime.Root, "library.yaml"))
+	return &Service{runtime: vm.NewManager(root, log), log: log, preparedMedia: map[string]bool{}, guestTransport: newGuestTransport(), revision: uint64(time.Now().UnixNano())}
 }
 func (s *Service) save(cfg Config) error {
 	ids, names := map[string]bool{}, map[string]bool{}
@@ -50,9 +54,13 @@ func (s *Service) save(cfg Config) error {
 	if err := vm.ValidateDeviceOwnership(cfg.Machines); err != nil {
 		return err
 	}
-	if err := vm.Save(filepath.Join(s.runtime.Root, "library.yaml"), cfg); err != nil {
+	path := filepath.Join(s.runtime.Root, "library.yaml")
+	if err := vm.Save(path, cfg); err != nil {
 		return err
 	}
+	// Force the next read to verify the file, including edits from external tools.
+	s.cached = nil
+	s.revision++
 	s.cleanupMedia(cfg)
 	return nil
 }
@@ -96,26 +104,34 @@ func (s *Service) Execute(ctx context.Context, r Request) (value any, err error)
 	defer release()
 	s.mu.Lock()
 	cfg, err := s.config()
+	revision := s.revision
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 	switch r.Action {
 	case "list", "status":
-		items := make([]Item, 0, len(cfg.Machines))
-		for _, m := range cfg.Machines {
+		machines := page(cfg.Machines, r.Offset, r.Limit)
+		items := make([]Item, 0, len(machines.Items))
+		for _, m := range machines.Items {
 			item := Item{ID: m.ID, Name: m.Name, State: s.runtime.State(m.ID), Guest: m.GuestName(), MemoryMiB: s.runtime.Memory(m.ID)}
+			if item.State != "已关机" {
+				item.RuntimeID, _ = s.runtime.GuestDisplayRuntime(m.ID)
+			}
 			if job, ok := s.progress.Load(m.ID); ok {
 				copy := job.(Progress)
 				item.Progress = &copy
 			}
 			items = append(items, item)
 		}
-		return page(items, r.Offset, r.Limit), nil
+		return Page[Item]{Total: machines.Total, Items: items, Revision: revision}, nil
 	case "config":
+		if r.Offset == 0 && r.Revision == revision {
+			return ConfigurationPage{Revision: revision, Unchanged: true}, nil
+		}
 		machines := page(cfg.Machines, r.Offset, r.Limit)
 		cfg.Machines = nil
-		return ConfigurationPage{Settings: cfg, Machines: machines}, nil
+		return ConfigurationPage{Settings: cfg, Machines: machines, Revision: revision}, nil
 	case "settings":
 		return Settings{s.runtime.Root, cfg.SideChannelMitigations}, nil
 	case "settings-update":

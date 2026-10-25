@@ -5,12 +5,63 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	vm "my-vm/library"
 )
+
+func TestPollingRepaintsOnlyForChangedState(t *testing.T) {
+	item := vm.Item{ID: "test", Name: "Test", State: "运行中", MemoryMiB: 1024}
+	a := &application{manager: vm.NewClient(&http.Client{Transport: guiTestTransport(func(request *http.Request) (*http.Response, error) {
+		response := httptest.NewRecorder()
+		json.NewEncoder(response).Encode(vm.Page[vm.Item]{Total: 1, Items: []vm.Item{item}})
+		return response.Result(), nil
+	})})}
+	refresh := func() bool {
+		t.Helper()
+		if err := a.manager.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return a.applyRefresh(a.config, nil, nil)
+	}
+	if !refresh() || refresh() {
+		t.Fatal("unchanged state triggered repaint")
+	}
+	item.RuntimeID = "runtime-1"
+	if !refresh() || a.manager.RuntimeID(item.ID) != item.RuntimeID || refresh() {
+		t.Fatal("runtime identity change was not painted exactly once")
+	}
+	item.MemoryMiB++
+	if !refresh() || refresh() {
+		t.Fatal("runtime memory change was not painted exactly once")
+	}
+	a.config.Machines = []vm.Machine{{ID: item.ID}}
+	a.selected = item.ID
+	item.Progress = &vm.Progress{Action: "snapshot-create", Completed: 1, Total: 2}
+	if !refresh() || !a.externalJobs[item.ID] || refresh() {
+		t.Fatal("external progress was not painted and reserved")
+	}
+	item.Progress.Completed++
+	if !refresh() {
+		t.Fatal("progress update was suppressed")
+	}
+	item.Progress = nil
+	if !refresh() || a.externalJobs[item.ID] || refresh() {
+		t.Fatal("external completion did not release its reservation")
+	}
+	cfg := a.config
+	cfg.SideChannelMitigations = !cfg.SideChannelMitigations
+	if !a.applyRefresh(cfg, nil, nil) || a.applyRefresh(cfg, nil, nil) {
+		t.Fatal("settings change was not painted exactly once")
+	}
+	err := errors.New("disconnected")
+	if !a.applyRefresh(cfg, err, nil) || a.applyRefresh(cfg, err, nil) || !a.applyRefresh(cfg, nil, nil) {
+		t.Fatal("error or recovery repaint was suppressed")
+	}
+}
 
 func TestEditingDefaultsPreserveOriginalVersion(t *testing.T) {
 	a := testApplication(t, 1)
@@ -32,6 +83,7 @@ func TestConsoleRuntimeChangesAreObservedAcrossClients(t *testing.T) {
 	const id = "vm"
 	current := &displayWindow{runtime: "old", automatic: true}
 	a := &application{displays: map[string]*displayWindow{id: current}}
+	displayQueries := 0
 	a.manager = vm.NewClient(&http.Client{Transport: guiTestTransport(func(request *http.Request) (*http.Response, error) {
 		var input vm.Request
 		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
@@ -40,8 +92,9 @@ func TestConsoleRuntimeChangesAreObservedAcrossClients(t *testing.T) {
 		response := httptest.NewRecorder()
 		switch input.Action {
 		case "list":
-			json.NewEncoder(response).Encode(vm.Page[vm.Item]{Total: 1, Items: []vm.Item{{ID: id, State: "运行中"}}})
+			json.NewEncoder(response).Encode(vm.Page[vm.Item]{Total: 1, Items: []vm.Item{{ID: id, State: "运行中", RuntimeID: "new"}}})
 		case "display-info":
+			displayQueries++
 			json.NewEncoder(response).Encode(vm.DisplayInfo{RuntimeID: "new"})
 		default:
 			t.Fatal(input)
@@ -56,8 +109,8 @@ func TestConsoleRuntimeChangesAreObservedAcrossClients(t *testing.T) {
 		t.Fatal("CLI runtime replacement did not schedule existing console", changes)
 	}
 	current.runtime = "new"
-	if changes = a.displayRestarts(context.Background()); len(changes) != 0 {
-		t.Fatal("unchanged console scheduled for replacement", changes)
+	if changes = a.displayRestarts(context.Background()); len(changes) != 0 || displayQueries != 1 {
+		t.Fatal("unchanged console scheduled for replacement or queried again", changes, displayQueries)
 	}
 	delete(a.displays, id)
 	if changes = a.displayRestarts(context.Background()); len(changes) != 0 {

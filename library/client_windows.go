@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -22,9 +23,14 @@ import (
 // Client calls the same Service used by embedded applications. State and Memory
 // return the latest Refresh snapshot so GUI painting never performs I/O.
 type Client struct {
-	http  *http.Client
-	mu    sync.RWMutex
-	items map[string]Item
+	http           *http.Client
+	mu             sync.RWMutex
+	items          map[string]Item
+	itemsRevision  uint64
+	stateRevision  uint64
+	configMu       sync.Mutex
+	configuration  Config
+	configRevision uint64
 }
 
 func NewClient(transport *http.Client) *Client {
@@ -89,23 +95,59 @@ func (c *Client) Execute(ctx context.Context, input Request) (json.RawMessage, e
 }
 
 func (c *Client) Configuration(ctx context.Context) (Config, error) {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	return c.loadConfiguration(ctx)
+}
+
+// RefreshConfiguration avoids retransmitting unchanged configuration during GUI polling.
+func (c *Client) RefreshConfiguration(ctx context.Context) (Config, error) {
+	if err := c.Refresh(ctx); err != nil {
+		return Config{}, err
+	}
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+	c.mu.RLock()
+	revision := c.itemsRevision
+	c.mu.RUnlock()
+	if revision != 0 && revision == c.configRevision {
+		return cloneConfig(c.configuration), nil
+	}
+	return c.loadConfiguration(ctx)
+}
+
+func (c *Client) loadConfiguration(ctx context.Context) (Config, error) {
 	var result Config
-	for offset := 0; ; {
-		data, err := c.Execute(ctx, Request{Action: "config", Offset: offset, Limit: 100})
+	var revision uint64
+	for offset, retries := 0, 0; ; {
+		known := uint64(0)
+		if offset == 0 {
+			known = c.configRevision
+		}
+		data, err := c.Execute(ctx, Request{Action: "config", Offset: offset, Limit: 100, Revision: known})
 		if err != nil {
 			return result, err
 		}
-		var value struct {
-			Settings Config        `json:"settings"`
-			Machines Page[Machine] `json:"machines"`
-		}
+		var value ConfigurationPage
 		if err = json.Unmarshal(data, &value); err != nil {
 			return result, err
 		}
+		if value.Unchanged && value.Revision == c.configRevision {
+			return cloneConfig(c.configuration), nil
+		}
+		if offset > 0 && revision != value.Revision {
+			if retries >= 2 {
+				return Config{}, fmt.Errorf("配置在分页期间持续变化，请重试")
+			}
+			result, offset, retries = Config{}, 0, retries+1
+			continue
+		}
+		revision = value.Revision
 		result.SideChannelMitigations, result.QEMUDir = value.Settings.SideChannelMitigations, value.Settings.QEMUDir
 		result.Machines = append(result.Machines, value.Machines.Items...)
 		offset += len(value.Machines.Items)
 		if offset >= value.Machines.Total || len(value.Machines.Items) == 0 {
+			c.configuration, c.configRevision = cloneConfig(result), revision
 			return result, nil
 		}
 	}
@@ -113,7 +155,8 @@ func (c *Client) Configuration(ctx context.Context) (Config, error) {
 
 func (c *Client) Refresh(ctx context.Context) error {
 	items := map[string]Item{}
-	for offset := 0; ; {
+	var revision uint64
+	for offset, retries := 0, 0; ; {
 		data, err := c.Execute(ctx, Request{Action: "list", Offset: offset, Limit: 100})
 		if err != nil {
 			return err
@@ -122,6 +165,14 @@ func (c *Client) Refresh(ctx context.Context) error {
 		if err = json.Unmarshal(data, &value); err != nil {
 			return err
 		}
+		if offset > 0 && revision != value.Revision {
+			if retries >= 2 {
+				return fmt.Errorf("配置在状态分页期间持续变化，请重试")
+			}
+			items, offset, retries = map[string]Item{}, 0, retries+1
+			continue
+		}
+		revision = value.Revision
 		for _, item := range value.Items {
 			items[item.ID] = item
 		}
@@ -131,10 +182,21 @@ func (c *Client) Refresh(ctx context.Context) error {
 		}
 	}
 	c.mu.Lock()
-	c.items = items
+	if !reflect.DeepEqual(c.items, items) {
+		c.stateRevision++
+	}
+	c.items, c.itemsRevision = items, revision
 	c.mu.Unlock()
 	return nil
 }
+
+// StateRevision changes when the cached list, runtime state, memory or progress changes.
+func (c *Client) StateRevision() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stateRevision
+}
+
 func (c *Client) State(id string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -142,6 +204,11 @@ func (c *Client) State(id string) string {
 		return item.State
 	}
 	return "已关机"
+}
+func (c *Client) RuntimeID(id string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.items[id].RuntimeID
 }
 func (c *Client) Memory(id string) int {
 	c.mu.RLock()

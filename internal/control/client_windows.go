@@ -28,6 +28,9 @@ func pipeName() (string, string, error) {
 }
 
 func dialManager(ctx context.Context, name string) (net.Conn, error) {
+	// HTTP pooling detaches request cancellation from the dial context.
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	connection, err := winio.DialPipeContext(ctx, name)
 	if err != nil {
 		return nil, err
@@ -117,7 +120,7 @@ func ExistingClient() (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	transport := &http.Transport{MaxIdleConns: 8, MaxIdleConnsPerHost: 4, MaxConnsPerHost: 16, IdleConnTimeout: 30 * time.Second, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return dialManager(ctx, name)
 	}}
 	return &http.Client{Transport: transport}, nil

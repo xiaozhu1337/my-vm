@@ -157,6 +157,9 @@ func (a *application) displayRestarts(ctx context.Context) []displayRestart {
 		if a.manager.State(id) == "已关机" || a.manager.Progress(id) != nil {
 			continue
 		}
+		if runtime := a.manager.RuntimeID(id); runtime != "" && runtime == display.runtime {
+			continue
+		}
 		data, err := a.manager.Execute(ctx, vm.Request{Action: "display-info", VM: id})
 		if err != nil {
 			continue

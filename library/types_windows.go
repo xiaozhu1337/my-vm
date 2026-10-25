@@ -46,6 +46,7 @@ type Request struct {
 	Enabled    *bool    `json:"enabled,omitempty"`
 	Offset     int      `json:"offset,omitempty"`
 	Limit      int      `json:"limit,omitempty"`
+	Revision   uint64   `json:"revision,omitempty"`
 }
 
 type Item struct {
@@ -55,6 +56,7 @@ type Item struct {
 	Guest     string    `json:"guest"`
 	Progress  *Progress `json:"progress,omitempty"`
 	MemoryMiB int       `json:"memory_mib"`
+	RuntimeID string    `json:"runtime_id,omitempty"`
 }
 
 type Progress struct {
@@ -65,8 +67,9 @@ type Progress struct {
 }
 
 type Page[T any] struct {
-	Total int `json:"total"`
-	Items []T `json:"items"`
+	Total    int    `json:"total"`
+	Items    []T    `json:"items"`
+	Revision uint64 `json:"revision,omitempty"`
 }
 
 type Settings struct {
@@ -92,8 +95,10 @@ type DisplayInfo struct {
 }
 
 type ConfigurationPage struct {
-	Settings Config        `json:"settings"`
-	Machines Page[Machine] `json:"machines"`
+	Settings  Config        `json:"settings"`
+	Machines  Page[Machine] `json:"machines"`
+	Revision  uint64        `json:"revision"`
+	Unchanged bool          `json:"unchanged,omitempty"`
 }
 
 type HostNetworks struct {

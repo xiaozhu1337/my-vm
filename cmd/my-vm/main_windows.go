@@ -187,29 +187,42 @@ func (a *application) poll(ctx context.Context) {
 			return
 		}
 		mygo.RunOnMain(func() {
-			if err != nil {
-				if a.loadError == nil {
-					a.report(err)
-				}
-				a.loadError = err
-			} else {
-				if !reflect.DeepEqual(a.config, cfg) {
-					a.config = cfg
-					a.resetSnapshots()
-				}
-				a.syncJobs()
-				if displayErr != nil {
-					a.report(displayErr)
-				}
-				if a.loadError != nil {
-					a.loadError = nil
-					a.message = "已重新连接核心服务"
-					a.messageError = false
-				}
-			}
-			if a.window != nil {
+			if a.applyRefresh(cfg, err, displayErr) && a.window != nil {
 				a.window.Invalidate()
 			}
 		})
 	}
+}
+
+func (a *application) applyRefresh(cfg vm.Config, err, displayErr error) bool {
+	if err != nil {
+		changed := a.loadError == nil || a.loadError.Error() != err.Error()
+		if changed {
+			a.report(err)
+		}
+		a.loadError = err
+		return changed
+	}
+	revision := a.manager.StateRevision()
+	changed := a.stateRevision != revision
+	a.stateRevision = revision
+	if !reflect.DeepEqual(a.config, cfg) {
+		a.config = cfg
+		a.resetSnapshots()
+		changed = true
+	}
+	if changed {
+		a.syncJobs()
+	}
+	if displayErr != nil {
+		a.report(displayErr)
+		changed = true
+	}
+	if a.loadError != nil {
+		a.loadError = nil
+		a.message = "已重新连接核心服务"
+		a.messageError = false
+		changed = true
+	}
+	return changed
 }

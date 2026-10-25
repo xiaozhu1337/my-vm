@@ -3,23 +3,19 @@
 package library
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Microsoft/go-winio"
 	"github.com/Microsoft/go-winio/pkg/guid"
 	"my-vm/internal/control"
 	"my-vm/internal/guestops"
-	"my-vm/internal/sharing"
 )
 
 type Server = control.Server
@@ -130,25 +126,15 @@ func (s *Service) guest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, 400)
 		return
 	}
-	// Read the full response before closing Hvsock; immediate peer close can truncate buffered data.
-	transport := &http.Transport{ResponseHeaderTimeout: time.Hour + time.Minute, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-		defer cancel()
-		connection, err := winio.Dial(ctx, &winio.HvsockAddr{VMID: vmid, ServiceID: winio.VsockServiceID(guestops.Port)})
-		if err != nil {
-			return nil, err
-		}
-		return sharing.SocketConnection(connection), nil
-	}}
-	defer transport.CloseIdleConnections()
-	destination := &url.URL{Scheme: "http", Host: "guest", Path: path, RawQuery: r.URL.RawQuery}
+	// Keep each runtime in a separate pool and drain responses before reusing Hvsock.
+	destination := &url.URL{Scheme: "http", Host: vmid.String(), Path: path, RawQuery: r.URL.RawQuery}
 	request, err := http.NewRequestWithContext(r.Context(), r.Method, destination.String(), r.Body)
 	if err != nil {
 		writeError(w, err, 400)
 		return
 	}
 	request.ContentLength = r.ContentLength
-	response, err := transport.RoundTrip(request)
+	response, err := s.guestTransport.RoundTrip(request)
 	if err != nil {
 		fmt.Fprintln(s.log, err)
 		writeError(w, fmt.Errorf("客户机工具未就绪或操作失败: %w", err), 502)
@@ -163,5 +149,6 @@ func (s *Service) guest(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(response.StatusCode)
 	if _, err := io.Copy(w, response.Body); err != nil {
 		fmt.Fprintln(s.log, "客户机传输:", err)
+		panic(http.ErrAbortHandler)
 	}
 }
