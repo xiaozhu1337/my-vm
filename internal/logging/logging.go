@@ -1,7 +1,9 @@
 package logging
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,20 +25,43 @@ func Open(dir string) (*Logger, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Logger{queue: make(chan []byte, 256), done: make(chan struct{})}
+	l := &Logger{queue: make(chan []byte, 4096), done: make(chan struct{})}
 	go func() {
 		defer close(l.done)
 		defer f.Close()
-		for p := range l.queue {
-			if _, err := f.Write(p); err != nil {
-				fmt.Fprintln(os.Stderr, "日志写入失败:", err)
-			}
-		}
+		l.drain(f)
 		if err := f.Sync(); err != nil {
 			fmt.Fprintln(os.Stderr, "日志同步失败:", err)
 		}
 	}()
 	return l, nil
+}
+
+func (l *Logger) drain(output io.Writer) {
+	buffer := bufio.NewWriterSize(output, 64<<10)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	flush := func() {
+		if err := buffer.Flush(); err != nil {
+			fmt.Fprintln(os.Stderr, "日志写入失败，丢弃未写出的缓冲记录:", err)
+			buffer.Reset(output)
+		}
+	}
+	defer flush()
+	for {
+		select {
+		case entry, ok := <-l.queue:
+			if !ok {
+				return
+			}
+			if _, err := buffer.Write(entry); err != nil {
+				fmt.Fprintln(os.Stderr, "日志写入失败，丢弃未写出的缓冲记录:", err)
+				buffer.Reset(output)
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
 }
 
 func (l *Logger) Write(p []byte) (int, error) {
