@@ -93,10 +93,10 @@ return json.Unmarshal(result, &machines)
 ## 验证
 
 ```text
-mise exec go@1.27.2 -- go test ./...
-mise exec go@1.27.2 -- go vet ./...
-mise exec go@1.27.2 -- go list -deps ./library
-mise exec go@1.27.2 -- go list -deps ./cmd/my-vm-cli
+mise exec go@1.27.3 -- go test ./...
+mise exec go@1.27.3 -- go vet ./...
+mise exec go@1.27.3 -- go list -deps ./library
+mise exec go@1.27.3 -- go list -deps ./cmd/my-vm-cli
 ```
 
 后两条依赖树不应包含 MyGo、Onevra 或 `internal/console`。库测试通过真实 `Service` 和内存传输验证配置、分页、并发、版本冲突、共享路径、介质回收及安全边界；CLI 测试验证命令映射、导出导入、JSON/YAML、退出码和二进制文件传输；GUI 测试保留布局、草稿、操作禁用与关闭流程，并验证原始版本和会话变更检测。

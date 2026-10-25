@@ -116,10 +116,10 @@ Guest commands and file transfer require installed, running guest tools. Snapsho
 Development tools are managed with [mise](https://mise.jdx.dev/). On Windows x64:
 
 ```text
-mise install go@1.27.2
+mise install go@1.27.3
 mise install python@3.12
-mise exec go@1.27.2 -- go build -trimpath -ldflags=-H=windowsgui -o "dist/my-vm.exe" ./cmd/my-vm
-mise exec go@1.27.2 -- go build -trimpath -o "dist/my-vm-cli.exe" ./cmd/my-vm-cli
+mise exec go@1.27.3 -- go build -trimpath -ldflags=-H=windowsgui -o "dist/my-vm.exe" ./cmd/my-vm
+mise exec go@1.27.3 -- go build -trimpath -o "dist/my-vm-cli.exe" ./cmd/my-vm-cli
 ```
 
 To also build the portable enhancement discs:
@@ -131,8 +131,8 @@ mise exec python@3.12 -- python -X utf8 "scripts/build.py"
 The first media build downloads portable GPU module source and license texts; later builds verify and reuse `dist/guest-payload`. It does not collect Ubuntu packages or require Docker/WSL. Standard `HTTP_PROXY`/`HTTPS_PROXY` settings are respected. Linux guests need network access during enhancement installation. GPU-PV requires compatible guest kernels and host-matched drivers; support is hardware-dependent.
 
 ```text
-mise exec go@1.27.2 -- go test ./...
-mise exec go@1.27.2 -- go vet ./...
+mise exec go@1.27.3 -- go test ./...
+mise exec go@1.27.3 -- go vet ./...
 ```
 
 ## Data and scope

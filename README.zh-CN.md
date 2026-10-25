@@ -116,10 +116,10 @@ my-vm-cli.exe --help
 开发工具使用 [mise](https://mise.jdx.dev/) 管理，在 Windows x64 上执行：
 
 ```text
-mise install go@1.27.2
+mise install go@1.27.3
 mise install python@3.12
-mise exec go@1.27.2 -- go build -trimpath -ldflags=-H=windowsgui -o "dist/my-vm.exe" ./cmd/my-vm
-mise exec go@1.27.2 -- go build -trimpath -o "dist/my-vm-cli.exe" ./cmd/my-vm-cli
+mise exec go@1.27.3 -- go build -trimpath -ldflags=-H=windowsgui -o "dist/my-vm.exe" ./cmd/my-vm
+mise exec go@1.27.3 -- go build -trimpath -o "dist/my-vm-cli.exe" ./cmd/my-vm-cli
 ```
 
 需要同时构建通用增强盘时：
@@ -131,8 +131,8 @@ mise exec python@3.12 -- python -X utf8 "scripts/build.py"
 首次制作光盘会下载通用 GPU 模块源码和许可文本，之后校验并复用 `dist/guest-payload` 缓存，不再收集 Ubuntu 软件包，也不需要 Docker/WSL。构建遵循 `HTTP_PROXY`/`HTTPS_PROXY` 环境设置。Linux 客户机安装增强时需要联网；GPU-PV 另需兼容客户机内核和与宿主匹配的驱动，支持范围取决于实际硬件。
 
 ```text
-mise exec go@1.27.2 -- go test ./...
-mise exec go@1.27.2 -- go vet ./...
+mise exec go@1.27.3 -- go test ./...
+mise exec go@1.27.3 -- go vet ./...
 ```
 
 ## 数据与适用范围

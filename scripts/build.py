@@ -53,7 +53,7 @@ def build_disc(platform, payloads):
         environment = dict(os.environ, GOOS=platform, GOARCH='amd64', CGO_ENABLED='0')
         flags = ['-ldflags=-H=windowsgui'] if platform == 'windows' else []
         target = stage / name
-        run('mise', 'exec', 'go@1.27.2', '--', 'go', 'build', '-trimpath', *flags,
+        run('mise', 'exec', 'go@1.27.3', '--', 'go', 'build', '-trimpath', *flags,
             '-o', str(target), './cmd/guest-tools', env=environment)
         staged.append(target)
         if platform == 'windows':
@@ -119,14 +119,14 @@ def main():
         run('python', '-X', 'utf8', str(ROOT / 'scripts' / 'guest_media' / 'gpu.py'), '--source-only')
     payloads['gpu-source'] = verified_files(source)
     build_icon()
-    run('mise', 'exec', 'go@1.27.2', '--', 'go', 'run',
+    run('mise', 'exec', 'go@1.27.3', '--', 'go', 'run',
         'github.com/tc-hib/go-winres@v0.3.3', 'simply', '--arch', 'amd64',
         '--manifest', 'none', '--icon', str(ROOT / 'assets' / 'my-vm.ico'),
         '--out', str(ROOT / 'cmd' / 'my-vm' / 'rsrc'))
-    run('mise', 'exec', 'go@1.27.2', '--', 'go', 'build', '-trimpath',
+    run('mise', 'exec', 'go@1.27.3', '--', 'go', 'build', '-trimpath',
         '-o', str(DIST / 'my-vm-cli.exe'), './cmd/my-vm-cli',
         env=dict(os.environ, GOOS='windows', GOARCH='amd64', CGO_ENABLED='0'))
-    run('mise', 'exec', 'go@1.27.2', '--', 'go', 'build', '-trimpath',
+    run('mise', 'exec', 'go@1.27.3', '--', 'go', 'build', '-trimpath',
         '-ldflags=-H=windowsgui', '-o', str(DIST / 'my-vm.exe'), './cmd/my-vm',
         env=dict(os.environ, GOOS='windows', GOARCH='amd64', CGO_ENABLED='0'))
     for platform in ('windows', 'linux'):

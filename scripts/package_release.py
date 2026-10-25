@@ -23,7 +23,7 @@ def digest(path):
 
 
 def modules():
-    data = run('mise', 'exec', 'go@1.27.2', '--', 'go', 'list', '-m', '-json', 'all')
+    data = run('mise', 'exec', 'go@1.27.3', '--', 'go', 'list', '-m', '-json', 'all')
     decoder = json.JSONDecoder()
     while data.strip():
         value, end = decoder.raw_decode(data.lstrip())
@@ -65,7 +65,7 @@ def package():
         for license_file in licenses:
             files['licenses/' + folder + '/' + license_file.name] = license_file
         descriptions.append(module['Path'] + ' ' + module['Version'])
-    goroot = Path(run('mise', 'exec', 'go@1.27.2', '--', 'go', 'env', 'GOROOT').strip())
+    goroot = Path(run('mise', 'exec', 'go@1.27.3', '--', 'go', 'env', 'GOROOT').strip())
     files['licenses/go/LICENSE'] = goroot / 'LICENSE'
     notices = ('My VM: bundled third-party components\n\n'
                'Go runtime and libraries: see licenses/go/LICENSE.\n'
