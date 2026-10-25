@@ -173,19 +173,32 @@ func TestConfiguration(t *testing.T) {
 	}
 }
 
-func TestLinuxCredentialChannelWithoutSharedFolders(t *testing.T) {
-	machine := NewMachine()
-	machine.GuestOS = "linux"
-	machine.Shares = nil
-	cfg, err := configurationWithEndpoints(t.TempDir(), machine, []string{"endpoint-test"}, "S-1-5-21-test", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	devices := cfg["VirtualMachine"].(map[string]any)["Devices"].(map[string]any)
-	services := devices["HvSocket"].(map[string]any)["HvSocketConfig"].(map[string]any)["ServiceTable"].(map[string]any)
-	service := services[sharing.ServiceGUID()].(map[string]any)
-	if service["AllowWildcardBinds"] != false {
-		t.Fatal("registration must use a VM-specific listener")
+func TestGuestStatusChannelWithoutSharedFolders(t *testing.T) {
+	for _, guestOS := range []string{"windows10", "windows", "linux", "ubuntu26"} {
+		t.Run(guestOS, func(t *testing.T) {
+			machine := NewMachine()
+			machine.GuestOS = guestOS
+			machine.Shares = nil
+			cfg, err := configurationWithEndpoints(t.TempDir(), machine, []string{"endpoint-test"}, "S-1-5-21-test", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			devices := cfg["VirtualMachine"].(map[string]any)["Devices"].(map[string]any)
+			socket, ok := devices["HvSocket"].(map[string]any)
+			if !ok {
+				t.Fatal("guest status listener requires HvSocket without shared folders")
+			}
+			services := socket["HvSocketConfig"].(map[string]any)["ServiceTable"].(map[string]any)
+			service := services[sharing.ServiceGUID()].(map[string]any)
+			if service["AllowWildcardBinds"] != false {
+				t.Fatal("registration must use a VM-specific listener")
+			}
+			for _, key := range []string{"BindSecurityDescriptor", "ConnectSecurityDescriptor"} {
+				if service[key] != "D:P(A;;FA;;;SY)(A;;FA;;;BA)" {
+					t.Fatalf("%s must restrict access to SYSTEM and administrators", key)
+				}
+			}
+		})
 	}
 }
 

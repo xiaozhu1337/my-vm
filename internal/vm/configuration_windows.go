@@ -72,6 +72,8 @@ func configurationWithEndpoints(root string, m Machine, endpoints []string, sid 
 		"EnhancedModeVideo": map[string]any{"ConnectionOptions": connection(".enhanced")},
 		"Keyboard":          map[string]any{}, "Mouse": map[string]any{},
 		"Scsi": map[string]any{"my-vm-scsi": map[string]any{"Attachments": attachments}},
+		// Every VM reports guest status, including Windows without shared folders.
+		"HvSocket": map[string]any{"HvSocketConfig": map[string]any{"ServiceTable": map[string]any{sharing.ServiceGUID(): map[string]any{"AllowWildcardBinds": false, "BindSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)", "ConnectSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}}}},
 	}
 	if len(endpoints) > 0 {
 		adapters := map[string]any{}
@@ -92,9 +94,6 @@ func configurationWithEndpoints(root string, m Machine, endpoints []string, sid 
 			ports[strconv.Itoa(port.Number-1)] = map[string]any{"NamedPipe": port.Pipe}
 		}
 		devices["ComPorts"] = ports
-	}
-	if len(m.Shares) > 0 || m.IsLinux() {
-		devices["HvSocket"] = map[string]any{"HvSocketConfig": map[string]any{"ServiceTable": map[string]any{sharing.ServiceGUID(): map[string]any{"AllowWildcardBinds": false, "BindSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)", "ConnectSecurityDescriptor": "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}}}}
 	}
 	directory := filepath.Dir(DiskPath(root, m))
 	return map[string]any{
