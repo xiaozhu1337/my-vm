@@ -66,10 +66,10 @@ func Start(runtimeID string, shares []Share, log io.Writer, saveLogin func(*rdpa
 	mux.Handle("/v1/status", status.handler())
 	mux.Handle("/rdp-credentials", credentialHandler(saveLogin))
 	mux.Handle("/", handler)
-	server := &http.Server{ErrorLog: stdlog.New(log, "Shared folders: ", 0), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Minute, WriteTimeout: 10 * time.Minute, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32768}
+	server := &http.Server{ErrorLog: stdlog.New(log, "Shared folders: ", 0), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32768}
 	result := &Service{Status: status, server: server, listener: listener, closeRoots: closeRoots}
 	failed = false
-	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server.Handler = idleHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result.mu.Lock()
 		if result.closed {
 			result.mu.Unlock()
@@ -81,7 +81,7 @@ func Start(runtimeID string, shares []Share, log io.Writer, saveLogin func(*rdpa
 		defer result.requests.Done()
 		result.Seen.Store(true)
 		mux.ServeHTTP(w, r)
-	})
+	}), 10*time.Minute)
 	go func() {
 		if err := server.Serve(socketListener{listener}); err != nil && !errors.Is(err, http.ErrServerClosed) && log != nil {
 			fmt.Fprintln(log, "Shared folders:", err)

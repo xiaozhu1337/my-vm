@@ -41,7 +41,7 @@ func RunProxyReady(ctx context.Context, log io.Writer, mapShares func([]Share) e
 		r.Out.URL.Host = "my-vm-host"
 		r.Out.Host = r.In.Host
 	}}
-	server := &http.Server{ErrorLog: errorLog, Handler: proxy, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Minute, WriteTimeout: 10 * time.Minute, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32768}
+	server := &http.Server{ErrorLog: errorLog, Handler: idleHandler(proxy, 10*time.Minute), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 32768}
 	defer server.Close()
 	go func() { <-ctx.Done(); _ = server.Close() }()
 	go func() {
