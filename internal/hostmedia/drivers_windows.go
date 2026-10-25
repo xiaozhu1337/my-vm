@@ -201,6 +201,7 @@ func windowsRuntimeFile(name string) bool {
 func collectWindows(stage *staging, adapters []Adapter) error {
 	manifest := windowsManifest{Architecture: "amd64", Adapters: adapters}
 	seen := map[string]bool{}
+	var tasks []copyTask
 	for _, adapter := range adapters {
 		key := strings.ToLower(adapter.Driver)
 		if seen[key] {
@@ -224,17 +225,20 @@ func collectWindows(stage *staging, adapters []Adapter) error {
 			if err != nil {
 				return err
 			}
-			record, err := stage.copy(path, "windows-gpu/FileRepository/"+adapter.Driver+"/"+filepath.ToSlash(relative))
-			if err != nil {
-				return err
-			}
-			record.Name = strings.TrimPrefix(record.Name, "windows-gpu/")
-			manifest.Files = append(manifest.Files, record)
+			tasks = append(tasks, copyTask{path, "windows-gpu/FileRepository/" + adapter.Driver + "/" + filepath.ToSlash(relative)})
 			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("复制宿主 GPU 驱动 %s: %w", adapter.Name, err)
 		}
+	}
+	var err error
+	manifest.Files, err = copyParallel(tasks, stage.copy)
+	if err != nil {
+		return fmt.Errorf("复制宿主 GPU 驱动: %w", err)
+	}
+	for i := range manifest.Files {
+		manifest.Files[i].Name = strings.TrimPrefix(manifest.Files[i].Name, "windows-gpu/")
 	}
 	for _, adapter := range adapters {
 		for _, mapping := range adapter.Copies {

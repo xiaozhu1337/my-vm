@@ -9,11 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
+	"sync"
 	"unsafe"
 
 	"go.yaml.in/yaml/v3"
@@ -25,6 +24,7 @@ type fileRecord struct {
 	SHA256 string `yaml:"sha256"`
 }
 type staging struct {
+	mu    sync.Mutex
 	root  string
 	paths map[string]bool
 }
@@ -61,6 +61,8 @@ func newStaging(parent string) (*staging, error) {
 	return &staging{root: root, paths: map[string]bool{root: true}}, nil
 }
 func (s *staging) track(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := filepath.Join(s.root, filepath.FromSlash(name))
 	for current := path; current != s.root; current = filepath.Dir(current) {
 		s.paths[current] = true
@@ -164,19 +166,6 @@ func (s *staging) writeYAML(name string, value any) error {
 	return os.WriteFile(path, append([]byte("# Generated from this host; file paths and SHA-256 checksums describe the payload.\n"), data...), 0600)
 }
 
-func archiveCommand(args ...string) ([]byte, error) {
-	system, err := windows.GetSystemDirectory()
-	if err != nil {
-		return nil, err
-	}
-	command := exec.Command(filepath.Join(system, "tar.exe"), args...)
-	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
-	data, err := command.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("读取通用增强光盘失败（需要 Windows 自带 tar.exe）: %w: %s", err, strings.TrimSpace(string(data)))
-	}
-	return data, nil
-}
 func decodeArchiveNames(data []byte) (string, error) {
 	if len(data) == 0 {
 		return "", nil
