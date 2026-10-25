@@ -84,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, `my-vm-cli [options] <command>
   list | status | template
   create <machine.yaml> | get <VM> | update <VM> <machine.yaml>
-  clone <VM> <new-name> | remove <VM>（保留磁盘）
+  clone <VM> <new-name> [@current|snapshot-name-or-ID] | remove <VM>（保留磁盘）
   state|start|stop|kill|pause|resume <VM> | shutdown-all
   memory <VM> | memory set <VM> <MiB>
   snapshot list <VM> | snapshot create|restore|delete <VM> <name>

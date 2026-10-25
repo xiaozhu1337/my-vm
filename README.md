@@ -4,12 +4,12 @@
 
 <img src="assets/my-vm.png" alt="My VM icon" width="72">
 
-A native Windows virtual machine manager for Windows and Linux guests, built on **Hyper-V Host Compute Service (HCS)**. Hardware virtualization, live disk snapshots, and integrated Linux desktops in one application.
+A native Windows virtual machine manager for Windows and Linux guests, built on **Hyper-V Host Compute Service (HCS)**. Hardware virtualization, full-state snapshots, and integrated Linux desktops in one application.
 
 ## Why My VM?
 
 - **Native Hyper-V performance.** Uses the Windows virtualization stack directly, with hardware-backed CPU, memory, storage, and networking. No QEMU runtime is required.
-- **Live snapshots with branches.** Create VHDX differencing snapshots while your guest keeps running. Progress appears in the background. Restore an earlier point and create a new branch without copying the entire system disk.
+- **Snapshots with branches.** Save disks, firmware, RAM, and device state, then continue from the saved execution state. VHDX differencing disks preserve branches without copying the entire system disk.
 - **Linux enhanced sessions.** Connect to the existing GNOME or KDE Plasma Wayland desktop, with the picture automatically fitted to the window. GNOME also supports dynamic resolution. No replacement desktop or Xfce installation is required.
 - **Shared clipboard.** Copy and paste between the host and guest in enhanced sessions. Enable clipboard sharing per VM; supported formats depend on the guest's desktop service.
 - **Private folder sharing.** Make selected host folders available inside the guest without copying files back and forth. Configure access per VM, with read-only access by default and optional write access, over a private Hyper-V Socket channel without exposing a TCP file-sharing port.
@@ -65,7 +65,7 @@ Extract the complete archive into a writable folder, keep the enhancement ISOs n
 
 ### First VM
 
-1. Create a VM, select a Windows or Linux installation ISO, and assign CPU, memory, disk, and networking.
+1. Create a VM, select a Windows or Linux installation ISO, and assign CPU, default and maximum memory, disk, and networking.
 2. Right-click the VM to start it and open the basic console. Install the operating system normally.
 3. Choose **Install enhancements** from the VM's context menu to attach the appropriate guest-tools disc.
 4. In Windows, run `install.exe` from the disc as the logged-in desktop user and approve elevation. Windows enhanced sessions require a guest edition with an RDP server and an account with a login password.
@@ -80,16 +80,21 @@ Windows preparation excludes Linux libraries, host-only kernel drivers, installe
 
 Closing a console leaves its VM running. Closing the manager offers a normal shutdown of active VMs and waits for them to stop.
 
+## How is memory allocated?
+
+Default memory is used at the next boot. Maximum memory caps manual runtime changes; both can be set during creation or editing while powered off. Enabling memory reclamation and hot changes uses HCS deferred commitment and guest free-page reporting to release physical backing, and permits manual capacity changes. This is not the Hyper-V Manager policy that automatically grows and shrinks guest capacity between minimum and maximum values under pressure. Reclamation depends on guest support; the UI reports configured capacity, not current physical usage.
+
 ## Snapshots: what is saved?
 
-Snapshots contain **disk state**, not RAM or UEFI variables. Live creation is crash-consistent; it does not save a running application's memory or guarantee an application-consistent database backup.
+New snapshots contain **disks and UEFI firmware**. Creating one while running or paused also saves **RAM and device state**, so restoration continues from the saved execution state. Creation pauses the guest and then restores its previous running or paused status; pause duration depends on memory size and storage speed. GPU sharing currently prevents runtime state capture; power off before creating a snapshot with GPU sharing enabled.
 
-The snapshot page draws parent-child branches in a tree with zoom and pan controls. A separate current-position node marks the working state. Select a saved node to inspect, restore, or delete it; selection alone never changes the disk. To create another branch from an older snapshot, restore it first, then create a new snapshot. Existing branches remain available.
+The snapshot page uses fixed-size nodes and scrolls when branches exceed the viewport. A separate current-position node marks the working state. Select a saved node to inspect, restore, or delete it; selection alone never changes state. To create another branch from an older snapshot, restore it first, then create a new snapshot. Existing branches remain available.
 
-- Create and delete snapshots while the guest runs. Creation switches future writes to a new differencing disk.
-- Restore restarts a running guest, keeps a paused guest paused, and leaves a powered-off guest off. Unsnapshotted changes on the current branch are discarded after confirmation.
+- Running snapshots resume running, paused snapshots remain paused, and powered-off snapshots remain off. Older disk-only snapshots retain their original restore and restart behavior.
+- Restore discards unsnapshotted changes at the current position. Runtime restoration requires compatible hardware, networking, and mounted media, checked before stopping the current VM. External services, host shared folders, and other VMs are not rolled back.
 - Up to 16 named restore points per VM. Deleting a name retains disk layers still needed by another branch or the active disk, so space may not be reclaimed immediately.
-- Snapshots depend on their parent disks. Keep the entire disk chain and `storage.yaml` together; use an independent copy for backup. Online chain compaction is not implemented.
+- Keep the entire disk chain, saved `state-*` files, and `storage.yaml` together. RAM files contain sensitive guest data and need equivalent protection. Online chain compaction is not implemented.
+- Cloning requires choosing the current working state or a historical snapshot. The independent clone copies the selected disk and available saved firmware, and inherits neither the snapshot tree nor saved RAM.
 
 ## Command line
 
@@ -139,7 +144,7 @@ mise exec go@1.27.3 -- go vet ./...
 
 Configuration lives in `%APPDATA%\my-vm` as YAML. Errors are written asynchronously to `logs\my-vm.log` beside the executable. Removing a VM from the library keeps its disks and snapshots.
 
-This project currently targets **Windows x64 hosts**. It does not provide memory snapshots, unattended OS installation, automatic qcow2 conversion, or universal GPU compatibility. The background core owns HCS handles and survives GUI/CLI client exits. An abnormal core-service exit terminates its HCS VMs; shut guests down normally before stopping the service or closing the host session.
+This project currently targets **Windows x64 hosts**. It does not provide unattended OS installation, automatic qcow2 conversion, or universal GPU compatibility. The background core owns HCS handles and survives GUI/CLI client exits. An abnormal core-service exit terminates its HCS VMs; shut guests down normally before stopping the service or closing the host session.
 
 ## Todo
 

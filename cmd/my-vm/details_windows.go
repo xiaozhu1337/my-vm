@@ -19,7 +19,7 @@ func (a *application) details(c *ui.Context) {
 			ui.Row(c).Gap(14).Children(func() {
 				components.Badge(c, "Hyper-V 硬件虚拟化", components.BadgeOptions{Tone: components.BadgeAccent})
 				components.Badge(c, "按需分配磁盘")
-				components.Badge(c, "磁盘快照")
+				components.Badge(c, "快照")
 			})
 			if action(c, "创建第一台虚拟机", true, components.ButtonPrimary) {
 				a.edit(vm.NewMachine(), true)
@@ -41,7 +41,7 @@ func (a *application) details(c *ui.Context) {
 		})
 		stateBadge(c, state)
 	})
-	tabs := components.Tabs(c, &a.detailTab, components.TabsUnderline, "概览", "磁盘快照")
+	tabs := components.Tabs(c, &a.detailTab, components.TabsUnderline, "概览", "快照")
 	if tabs.List.Changed() && a.detailTab == 1 && !a.diskBusy(m.ID) {
 		a.refreshSnapshots(m)
 	}

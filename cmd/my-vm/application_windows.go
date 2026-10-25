@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"github.com/egoist/mygo"
-	"github.com/oneo-me/onevra/source/components/flow"
+	"github.com/egoist/mygo/ui"
 
 	"my-vm/internal/logging"
 
@@ -45,14 +45,17 @@ type application struct {
 	hostAdapters                            []hostAdapter
 	networkDetails                          []vm.Network
 	cloneSource                             *vm.Machine
+	cloneSnapshot                           string
+	cloneSnapshots                          []vm.Snapshot
+	cloneSnapshotsLoaded                    bool
 	listPage, filter, detailTab             int
 	draft, savedDraft, persistedDraft       vm.Machine
 	creating                                bool
-	cpu, memory, disk                       float64
+	cpu, memory, maxMemory, disk            float64
 	snapshots                               []vm.Snapshot
 	snapshotsLoaded                         bool
 	snapshotName, snapshotSelected          string
-	snapshotTree                            flow.State
+	snapshotTree                            ui.ScrollState
 	snapshotRequest                         int
 }
 
@@ -87,6 +90,7 @@ func (a *application) edit(m vm.Machine, creating bool) {
 	a.persistedDraft = m
 	a.editVersion++
 	a.cloneSource = nil
+	a.cloneSnapshot, a.cloneSnapshots, a.cloneSnapshotsLoaded = "", nil, false
 	a.deviceOnly = false
 	if m.GuestOS == "" {
 		m.GuestOS = "windows"
@@ -105,6 +109,7 @@ func (a *application) edit(m vm.Machine, creating bool) {
 	a.creating = creating
 	a.cpu = float64(m.CPUs)
 	a.memory = float64(m.MemoryMiB)
+	a.maxMemory = float64(m.MemoryLimitMiB())
 	a.disk = float64(m.DiskGiB)
 	a.page = "edit"
 }
@@ -118,6 +123,7 @@ func (a *application) saveDraft() {
 	m.Name = strings.TrimSpace(m.Name)
 	m.CPUs = int(a.cpu)
 	m.MemoryMiB = int(a.memory)
+	m.MaxMemoryMiB = int(a.maxMemory)
 	m.DiskGiB = int(a.disk)
 	if err := m.Validate(); err != nil {
 		a.report(err)
@@ -170,7 +176,7 @@ func (a *application) finishEditing(machine vm.Machine, version int) {
 func (a *application) hasUnsavedChanges() bool {
 	switch a.page {
 	case "edit":
-		return !reflect.DeepEqual(a.draft, a.savedDraft) || a.cpu != float64(a.savedDraft.CPUs) || a.memory != float64(a.savedDraft.MemoryMiB) || a.disk != float64(a.savedDraft.DiskGiB)
+		return !reflect.DeepEqual(a.draft, a.savedDraft) || a.cpu != float64(a.savedDraft.CPUs) || a.memory != float64(a.savedDraft.MemoryMiB) || a.maxMemory != float64(a.savedDraft.MemoryLimitMiB()) || a.disk != float64(a.savedDraft.DiskGiB)
 	case "settings":
 		return false
 	}
@@ -223,7 +229,7 @@ func (a *application) resetSnapshots() {
 	a.snapshots = nil
 	a.snapshotsLoaded = false
 	a.snapshotName, a.snapshotSelected = "", ""
-	a.snapshotTree = flow.State{}
+	a.snapshotTree = ui.ScrollState{}
 }
 
 func (a *application) acceptSnapshots(id string, request int, snapshots []vm.Snapshot) bool {
@@ -258,7 +264,7 @@ func (a *application) snapshot(m vm.Machine, action, name string) {
 		return
 	}
 	label := map[string]string{"-c": "创建快照", "-a": "恢复快照", "-d": "删除快照"}[action]
-	if action != "-c" && !a.confirm(label, label+"「"+name+"」？", "虚拟机："+m.Name+"\n"+map[string]string{"-a": "恢复会放弃当前未保存的磁盘内容。运行中的客户机会重启，内存、程序和未保存的操作不会恢复；请先为当前磁盘创建快照。", "-d": "删除后无法再恢复到此节点；其他分支和当前虚拟机保留。仍被引用的父盘会继续保留。"}[action]) {
+	if action != "-c" && !a.confirm(label, label+"「"+name+"」？", "虚拟机："+m.Name+"\n"+map[string]string{"-a": "恢复会放弃当前位置尚未保存的修改，回到快照时的磁盘、固件及运行状态。旧版磁盘快照不含内存，只能重启客户机；请先保存当前需要保留的状态。", "-d": "删除后无法再恢复到此节点；其他分支和当前虚拟机保留。仍被引用的父盘会继续保留。"}[action]) {
 		return
 	}
 	request := a.snapshotRequest

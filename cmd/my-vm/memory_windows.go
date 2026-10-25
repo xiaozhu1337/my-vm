@@ -18,7 +18,7 @@ func (a *application) memoryPage(c *ui.Context) {
 	scrollBody(c, "memory-"+m.ID, func() {
 		state := a.manager.State(m.ID)
 		if state == "已关机" || !m.DynamicMemory {
-			muted(c, "此虚拟机当前无法调整运行内存；请启用内存按需分配并启动虚拟机。")
+			muted(c, "此虚拟机当前无法调整运行内存；请启用内存回收与热调整并启动虚拟机。")
 			return
 		}
 		a.memoryCard(c, m, state)
@@ -36,9 +36,9 @@ func (a *application) memoryCard(c *ui.Context, m vm.Machine, state string) {
 		a.runtimeMemoryID = m.ID
 		a.runtimeMemory = float64(a.manager.Memory(m.ID))
 	}
-	card(c, "运行内存", "立即调整当前启动的内存，关机后恢复配置值；客户机需要支持内存集成。", func() {
+	card(c, "运行内存", "立即调整本次运行的容量，关机后恢复默认值；此处显示设定容量，实际物理占用由客户机和宿主管理。", func() {
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-			components.NumberInput(c, &a.runtimeMemory, 256, 1048576, 256).Label("运行内存 MiB").Width(220)
+			components.NumberInput(c, &a.runtimeMemory, 256, float64(m.MemoryLimitMiB()), 256).Label("运行内存 MiB").Width(220)
 			if button(c, "应用内存", state == "运行中" && !a.diskBusy(m.ID)) {
 				size := int(a.runtimeMemory)
 				a.run(m.ID, "调整运行内存「"+m.Name+"」", func() error { return a.action(vm.Request{Action: "memory-set", VM: m.ID, Size: size}) }, nil)

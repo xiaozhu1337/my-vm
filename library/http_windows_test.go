@@ -5,10 +5,12 @@ package library
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,5 +144,29 @@ func TestMachineSelectorRejectsAmbiguousNames(t *testing.T) {
 	}
 	if got, err := SelectMachine([]Machine{first, second}, first.ID); err != nil || got.ID != first.ID {
 		t.Fatal(got, err)
+	}
+}
+
+func TestEmptyPOSTPreservesCloneSnapshotSelection(t *testing.T) {
+	service, _ := fixture(t, 1)
+	cfg, _ := service.config()
+	source := cfg.Machines[0]
+	if err := service.runtime.CreateDisk("", source); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.runtime.Snapshot("", source, "-c", "base", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, selection := range []string{CloneCurrent, "base"} {
+		query := url.Values{"action": {"clone"}, "vm": {source.ID}, "snapshot": {selection}}
+		response := httptest.NewRecorder()
+		service.ServeHTTP(response, httptest.NewRequest("POST", "/v1/action?"+query.Encode(), nil))
+		if response.Code != http.StatusOK {
+			t.Fatal(selection, response.Code, response.Body.String())
+		}
+		var clone Machine
+		if err := json.Unmarshal(response.Body.Bytes(), &clone); err != nil || clone.ID == "" || clone.ID == source.ID {
+			t.Fatal("independent clone not registered", clone, err)
+		}
 	}
 }

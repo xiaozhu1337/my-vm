@@ -22,6 +22,8 @@ type Switch = hcs.Network
 type Command = guestops.Command
 type CommandResult = guestops.Result
 
+const CloneCurrent = vm.CloneCurrent
+
 var GuestSystems = vm.GuestSystems
 var NewMachine = vm.NewMachine
 var NewClone = vm.NewClone
@@ -38,6 +40,7 @@ type Request struct {
 	VM         string   `json:"vm,omitempty"`
 	Expected   *Machine `json:"expected,omitempty"`
 	Machine    *Machine `json:"machine,omitempty"`
+	Snapshot   string   `json:"snapshot,omitempty"`
 	Name       string   `json:"name,omitempty"`
 	CIDR       string   `json:"cidr,omitempty"`
 	Path       string   `json:"path,omitempty"`

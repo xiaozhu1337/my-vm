@@ -95,6 +95,11 @@ func configurationWithEndpoints(root string, m Machine, endpoints []string, sid 
 		}
 		devices["ComPorts"] = ports
 	}
+	memory := map[string]any{"SizeInMB": m.MemoryMiB, "AllowOvercommit": m.DynamicMemory}
+	if m.DynamicMemory {
+		// Guest page reporting can release backing pages without changing visible capacity.
+		memory["EnableDeferredCommit"], memory["EnableColdHint"], memory["EnableColdDiscardHint"] = true, true, true
+	}
 	directory := filepath.Dir(DiskPath(root, m))
 	return map[string]any{
 		"SchemaVersion":                     map[string]int{"Major": 2, "Minor": 5},
@@ -104,7 +109,7 @@ func configurationWithEndpoints(root string, m Machine, endpoints []string, sid 
 			"Services":        map[string]any{"Shutdown": map[string]any{}},
 			"StopOnReset":     false,
 			"Chipset":         map[string]any{"Uefi": map[string]any{"Console": "Default"}},
-			"ComputeTopology": map[string]any{"Memory": map[string]any{"SizeInMB": m.MemoryMiB, "AllowOvercommit": m.DynamicMemory}, "Processor": map[string]any{"Count": m.CPUs, "DisableSpeculationControls": !sideChannelMitigations}},
+			"ComputeTopology": map[string]any{"Memory": memory, "Processor": map[string]any{"Count": m.CPUs, "DisableSpeculationControls": !sideChannelMitigations}},
 			"Devices":         devices,
 			"GuestState":      map[string]any{"GuestStateFilePath": filepath.Join(directory, "guest.vmgs"), "RuntimeStateFilePath": filepath.Join(directory, "runtime.vmrs")},
 		},

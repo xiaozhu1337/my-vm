@@ -31,6 +31,7 @@ type Machine struct {
 	Name            string           `yaml:"name" json:"name"`
 	CPUs            int              `yaml:"cpus" json:"cpus"`
 	MemoryMiB       int              `yaml:"memory_mib" json:"memory_mib"`
+	MaxMemoryMiB    int              `yaml:"max_memory_mib" json:"max_memory_mib"`
 	DiskGiB         int              `yaml:"disk_gib" json:"disk_gib"`
 	ISO             string           `yaml:"iso" json:"iso"`
 	DriverISO       string           `yaml:"driver_iso" json:"driver_iso"`
@@ -94,7 +95,7 @@ func NewMachine() Machine {
 	if _, err := rand.Read(id[:]); err != nil {
 		panic(err)
 	}
-	return Machine{ID: hex.EncodeToString(id[:]), Backend: "hcs", GuestOS: "windows10", DynamicMemory: true, Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, DiskGiB: 64, Network: "nat", Clipboard: true}
+	return Machine{ID: hex.EncodeToString(id[:]), Backend: "hcs", GuestOS: "windows10", DynamicMemory: true, Name: "新虚拟机", CPUs: 2, MemoryMiB: 4096, MaxMemoryMiB: 8192, DiskGiB: 64, Network: "nat", Clipboard: true}
 }
 
 func (m Machine) Validate() error {
@@ -107,7 +108,9 @@ func (m Machine) Validate() error {
 	case m.CPUs < 1 || m.CPUs > 256:
 		return errors.New("CPU 数量需要在 1 到 256 之间")
 	case m.MemoryMiB < 256 || m.MemoryMiB > 1048576:
-		return errors.New("内存需要在 256 到 1048576 MiB 之间")
+		return errors.New("默认内存需要在 256 到 1048576 MiB 之间")
+	case m.MaxMemoryMiB != 0 && (m.MaxMemoryMiB < m.MemoryMiB || m.MaxMemoryMiB > 1048576):
+		return errors.New("最大内存不能小于默认内存，且不能超过 1048576 MiB")
 	case m.DiskGiB < 1 || m.DiskGiB > 65536:
 		return errors.New("磁盘需要在 1 到 65536 GiB 之间")
 	case m.Network != "nat" && m.Network != "bridge" && (m.Network != "none" || m.Backend != "hcs"):
@@ -254,7 +257,7 @@ func Save(path string, cfg Config) error {
 		"pipe":                     `本机绝对命名管道 \\.\pipe\...；my-vm- 前缀保留给控制台。`,
 		"guest_os":                 "客户机系统：windows10、windows11、ubuntu26；旧 windows/linux 和空值继续兼容，不改动已安装系统。",
 		"linux_desktop":            "Linux 增强会话仅支持 wayland（现有 GNOME/KDE）；旧 x11 配置只为兼容读取保留，增强方式已停用，不安装或替换桌面。",
-		"dynamic_memory":           "允许 HCS 按需分配内存及运行中修改内存；实际回收能力取决于客户机集成驱动。",
+		"dynamic_memory":           "启用可分页内存后备、客户机冷页回收提示及运行中手动调整；不是 Hyper-V VMMS 自动伸缩策略，回收依赖客户机支持。",
 		"gpu_shared":               "启用 Hyper-V GPU-PV 共享，默认关闭；需要兼容主机和客户机驱动，不保证显卡支持。",
 		"backend":                  "hcs 使用 Hyper-V Host Compute Service；旧 qemu 配置仅保留记录和磁盘，不再启动。",
 		"switch_id":                "HCN 交换机 GUID；NAT 留空时精确选择系统 Default Switch，桥接须指定现有外部交换机。",
@@ -264,7 +267,7 @@ func Save(path string, cfg Config) error {
 		"qemu_dir": "旧版本的 QEMU 目录，仅为兼容读取保留，HCS 不使用。",
 		"machines": "虚拟机清单；HCS 磁盘位于同目录 machines/<id>/disk.vhdx。",
 		"id":       "内部唯一标识；请勿修改。", "name": "显示名称；共享项名称需为字母开头的英文、数字、下划线或连字符。", "cpus": "虚拟 CPU 数量。",
-		"memory_mib": "内存大小，单位 MiB。", "disk_gib": "创建时的磁盘容量，单位 GiB；修改此字段不会调整磁盘。",
+		"memory_mib": "默认启动内存，单位 MiB；运行中调整不修改此值。", "max_memory_mib": "运行中手动调整的最大容量，单位 MiB；0 兼容旧配置上限 1048576，不表示自动增长。", "disk_gib": "创建时的磁盘容量，单位 GiB；修改此字段不会调整磁盘。",
 		"iso": "安装光盘 ISO 的绝对路径；留空表示不挂载光盘。", "network": "网络模式：nat、bridge 或 none（断开网络，复制后先处理客户机身份冲突）。",
 		"driver_iso":  "客户机工具或驱动光盘 ISO 的绝对路径；作为第二张只读光盘挂载，可与安装光盘同时使用。",
 		"display":     "旧版本的 std/virtio 显示设备记录；HCS 使用 Hyper-V 显示和本地 RDP。",

@@ -11,19 +11,21 @@ import (
 	"sync"
 	"time"
 
+	"my-vm/internal/checkpoint"
 	"my-vm/internal/hcs"
 	"my-vm/internal/rdpauth"
 	"my-vm/internal/sharing"
 )
 
 type session struct {
-	shares    *sharing.Service
-	system    *hcs.System
-	endpoints []*hcs.Endpoint
-	paused    bool
-	runtimeID string
-	machine   Machine
-	disk      string
+	shares     *sharing.Service
+	system     *hcs.System
+	endpoints  []*hcs.Endpoint
+	adapterIDs []string
+	paused     bool
+	runtimeID  string
+	machine    Machine
+	disk       string
 }
 
 type Manager struct {
@@ -84,18 +86,37 @@ func (m *Manager) Start(_ string, machine Machine) error {
 
 // start runs while the caller owns this machine's operation lock.
 func (m *Manager) start(machine Machine) error {
+	return m.startWithState(machine, nil)
+}
+
+func (m *Manager) startWithState(machine Machine, saved *checkpoint.Entry) error {
+	return m.startSession(machine, saved, saved != nil)
+}
+
+func (m *Manager) startSession(machine Machine, saved *checkpoint.Entry, restoring bool) error {
 	if err := requireHCS(machine); err != nil {
 		return err
 	}
 	if m.State(machine.ID) != "已关机" {
 		return errors.New("虚拟机已经启动")
 	}
-	storage, err := m.storage(machine)
+	storage, err := m.loadStorage(machine, restoring)
 	if err != nil {
 		return err
 	}
+	if !restoring && m.State(machine.ID) != "已关机" {
+		return nil // Recovery may have reloaded the original execution state.
+	}
 	if err = storage.CheckFiles(storage.Chain()...); err != nil {
 		return err
+	}
+	if saved != nil {
+		if machine, err = loadSnapshotMachine(machine, storage, *saved); err != nil {
+			return err
+		}
+		if err = copyState(snapshotStatePath(storage, *saved, "vmgs"), storage.Path("guest.vmgs"), true); err != nil {
+			return err
+		}
 	}
 	disk := storage.Path(storage.Active)
 	files := []string{disk, machine.ISO, machine.DriverISO}
@@ -146,7 +167,19 @@ func (m *Manager) start(machine Machine) error {
 			return err
 		}
 	}
-	endpoints, err := createNetworkEndpoints(machine, networks, id, hcs.CreateEndpoint, (*hcs.Endpoint).Close)
+	createEndpoint := hcs.CreateEndpoint
+	if saved != nil {
+		if len(saved.MACs) != len(machine.enabledNetworkAdapters()) {
+			return errors.New("快照缺少网卡 MAC 地址")
+		}
+		next := 0
+		createEndpoint = func(switchID, owner string, _ ...string) (*hcs.Endpoint, error) {
+			mac := saved.MACs[next]
+			next++
+			return hcs.CreateEndpoint(switchID, owner, mac)
+		}
+	}
+	endpoints, err := createNetworkEndpoints(machine, networks, id, createEndpoint, (*hcs.Endpoint).Close)
 	if err != nil {
 		return err
 	}
@@ -169,6 +202,15 @@ func (m *Manager) start(machine Machine) error {
 	if err != nil {
 		return err
 	}
+	if saved != nil {
+		statePath := snapshotStatePath(storage, *saved, "vmrs")
+		if err = hcs.PrepareFile(id, statePath, ""); err != nil {
+			return err
+		}
+		if err = applySnapshotState(configuration, storage, *saved, endpointIDs); err != nil {
+			return err
+		}
+	}
 	system, err := hcs.Create(id, configuration)
 	if err != nil {
 		return err
@@ -181,7 +223,7 @@ func (m *Manager) start(machine Machine) error {
 	if err = system.Action("HcsStartComputeSystem"); err != nil {
 		return err
 	}
-	if machine.GPUShared {
+	if machine.GPUShared && saved == nil {
 		if err = system.Modify("VirtualMachine/ComputeTopology/Gpu", map[string]any{"AssignmentMode": "Default", "AllowVendorExtension": true}); err != nil {
 			return fmt.Errorf("启用 GPU 共享失败（未回退为纯 CPU）: %w", err)
 		}
@@ -197,7 +239,16 @@ func (m *Manager) start(machine Machine) error {
 	if m.Log != nil {
 		fmt.Fprintln(m.Log, "HCS RuntimeId:", runtimeID)
 	}
-	s := &session{system: system, endpoints: endpoints, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine, disk: storage.Active}
+	s := &session{system: system, endpoints: endpoints, adapterIDs: endpointIDs, runtimeID: strings.Trim(runtimeID, "{}"), machine: machine, disk: storage.Active}
+	if saved != nil {
+		s.adapterIDs = append([]string(nil), saved.Adapters...)
+		if saved.State == "paused" {
+			if err = system.Action("HcsPauseComputeSystem"); err != nil {
+				return err
+			}
+			s.paused = true
+		}
+	}
 	var saveLogin func(*rdpauth.Login) error
 	if machine.IsLinux() {
 		saveLogin = func(login *rdpauth.Login) error {

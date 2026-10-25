@@ -454,13 +454,14 @@ func TestViewSnapshots(t *testing.T) {
 	tt := testView(a, 1080, 720)
 	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
 	tt.Advance(100 * time.Millisecond)
+	positions, _, _ := snapshotLayout(snapshotDiagram(a.snapshots))
 	for _, snapshot := range a.snapshots {
-		if _, _, ok := a.snapshotTree.Position(snapshot.ID); !ok || !tt.HasText(snapshot.Name) {
+		if _, ok := positions[snapshot.ID]; !ok || !tt.HasText(snapshot.Name) {
 			t.Fatal("snapshot missing from whole tree", snapshot.Name)
 		}
 	}
-	if !a.snapshotTree.Ready() || !tt.HasText("当前位置") || tt.HasText("下一组") {
-		t.Fatal("tree not ready or still paginated", tt.Texts())
+	if !tt.HasText("当前位置") || tt.HasText("下一组") || tt.HasText("放大") || tt.HasText("缩小") {
+		t.Fatal("tree missing or still scalable/paginated", tt.Texts())
 	}
 	a.snapshots = nil
 	tt.Frame()
@@ -485,7 +486,7 @@ func TestViewRunningSnapshotControlsAndTree(t *testing.T) {
 	}, 700, 1100)
 	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
 	tt.Advance(100 * time.Millisecond)
-	for _, label := range []string{"branch", "当前位置", "基于快照", "支持运行中创建和删除差分快照；恢复会重启客户机，不保留内存和未保存的操作。"} {
+	for _, label := range []string{"branch", "当前位置", "基于快照", "运行中创建快照会短暂暂停，保存内存、设备、固件和磁盘；恢复后继续快照时的状态。GPU 共享需先关机。"} {
 		if !tt.HasText(label) {
 			t.Fatal("running snapshot tree missing", label, tt.Texts())
 		}
@@ -500,18 +501,15 @@ func TestViewRunningSnapshotControlsAndTree(t *testing.T) {
 	if a.snapshotSelected != "2" || !tt.HasText("父快照") || !tt.HasText("baseline") {
 		t.Fatal("snapshot selection did not show its details", a.snapshotSelected, tt.Texts())
 	}
-	zoom := a.snapshotTree.Zoom()
-	click(t, tt, "放大")
-	tt.Advance(100 * time.Millisecond)
-	if a.snapshotTree.Zoom() <= zoom {
-		t.Fatal("tree zoom control did not zoom")
+	if tt.HasText("放大") || tt.HasText("缩小") || tt.HasText("显示全树") {
+		t.Fatal("fixed tree exposes zoom controls")
 	}
 	click(t, tt, "定位当前")
 	if a.snapshotSelected != snapshotCurrent {
 		t.Fatal("locate current did not select the working state")
 	}
-	click(t, tt, "显示全树")
-	tt.Advance(100 * time.Millisecond)
+	a.snapshotTree.X, a.snapshotTree.Y = 0, 0
+	tt.Frame()
 	click(t, tt, "branch")
 	click(t, tt, "创建快照")
 	if a.busy || a.diskJobs[a.selected] == nil {
@@ -539,7 +537,7 @@ func TestViewMinimumSizeAndTheme(t *testing.T) {
 			}
 			a.detailTab, a.snapshotsLoaded = 1, true
 			tt.Frame()
-			for _, label := range []string{"放大", "缩小", "显示全树", "定位当前", "刷新"} {
+			for _, label := range []string{"定位当前", "刷新"} {
 				r, ok := tt.Find(label)
 				if !ok || r.X < 256 || r.Y < 0 || r.X+r.W > 1040 || r.Y+r.H > 588 {
 					t.Fatalf("snapshot control %q outside minimum window: %v, found=%t", label, r, ok)

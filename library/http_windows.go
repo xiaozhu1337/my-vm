@@ -62,6 +62,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if r.Method == http.MethodGet || r.Method == http.MethodPost {
 		input.Action, input.VM, input.Name = r.URL.Query().Get("action"), r.URL.Query().Get("vm"), r.URL.Query().Get("name")
+		input.Snapshot = r.URL.Query().Get("snapshot")
 		input.Offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
 		input.Limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 		if r.Method == http.MethodGet {

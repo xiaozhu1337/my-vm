@@ -26,12 +26,15 @@ var validNode = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 // Entry names an immutable recovery point; writable state always lives in a separate leaf.
 type Entry struct {
-	ID      string `yaml:"id"`
-	Name    string `yaml:"name"`
-	Created int64  `yaml:"created"`
-	Disk    string `yaml:"disk"`
-	Parent  string `yaml:"parent,omitempty"`
-	Legacy  bool   `yaml:"legacy,omitempty"`
+	ID       string   `yaml:"id"`
+	Name     string   `yaml:"name"`
+	Created  int64    `yaml:"created"`
+	Disk     string   `yaml:"disk"`
+	Parent   string   `yaml:"parent,omitempty"`
+	Legacy   bool     `yaml:"legacy,omitempty"`
+	State    string   `yaml:"state,omitempty"`
+	Adapters []string `yaml:"adapters,omitempty"`
+	MACs     []string `yaml:"macs,omitempty"`
 }
 
 type Fork struct {
@@ -39,15 +42,25 @@ type Fork struct {
 	Child string `yaml:"child"`
 }
 
+type Restore struct {
+	Active    string `yaml:"previous_active"`
+	Current   string `yaml:"previous_current,omitempty"`
+	Firmware  bool   `yaml:"restore_firmware"`
+	Backup    string `yaml:"firmware_backup,omitempty"`
+	Rollback  *Entry `yaml:"previous_state,omitempty"`
+	Reverting bool   `yaml:"reverting,omitempty"`
+}
+
 type Store struct {
-	Version int               `yaml:"version"`
-	Active  string            `yaml:"active"`
-	Current string            `yaml:"current,omitempty"`
-	Layers  map[string]string `yaml:"layers"`
-	Entries []Entry           `yaml:"snapshots"`
-	Pending *Fork             `yaml:"pending_fork,omitempty"`
-	Garbage []string          `yaml:"garbage,omitempty"`
-	Dir     string            `yaml:"-"`
+	Version   int               `yaml:"version"`
+	Active    string            `yaml:"active"`
+	Current   string            `yaml:"current,omitempty"`
+	Layers    map[string]string `yaml:"layers"`
+	Entries   []Entry           `yaml:"snapshots"`
+	Pending   *Fork             `yaml:"pending_fork,omitempty"`
+	Restoring *Restore          `yaml:"pending_restore,omitempty"`
+	Garbage   []string          `yaml:"garbage,omitempty"`
+	Dir       string            `yaml:"-"`
 }
 
 func NewID() (string, error) {
@@ -210,9 +223,34 @@ func (s *Store) Validate() error {
 			return errors.New("未完成分叉与活动磁盘不一致")
 		}
 	}
+	if s.Restoring != nil {
+		r := s.Restoring
+		if s.Pending != nil || !safeFile(r.Active) || (r.Active == s.Active) != r.Reverting {
+			return errors.New("未完成恢复的原磁盘无效")
+		}
+		if _, ok := s.Layers[r.Active]; !ok {
+			return errors.New("未完成恢复的原磁盘不在磁盘链中")
+		}
+		if r.Current != "" {
+			if _, ok := entries[r.Current]; !ok {
+				return errors.New("未完成恢复的原快照不存在")
+			}
+		}
+		if r.Rollback != nil {
+			if err := s.validateEntry(*r.Rollback); err != nil {
+				return err
+			}
+			if r.Rollback.Disk != r.Active || (r.Rollback.State != "running" && r.Rollback.State != "paused") || r.Backup != "state-"+r.Rollback.ID+".vmgs" || !r.Firmware {
+				return errors.New("未完成恢复的原运行现场无效")
+			}
+		}
+		if r.Backup != "" && (!r.Firmware || !validStateFile.MatchString(r.Backup) || !strings.HasSuffix(r.Backup, ".vmgs")) {
+			return errors.New("未完成恢复的固件备份路径无效")
+		}
+	}
 	live := s.liveFiles()
 	for _, name := range s.Garbage {
-		if !safeFile(name) || live[name] {
+		if !safeArtifact(name) || live[name] {
 			return errors.New("待清理路径无效或仍在使用")
 		}
 	}
@@ -259,6 +297,12 @@ func (s *Store) CheckFork(parent string) error {
 func (s *Store) validateEntry(e Entry) error {
 	if !validNode.MatchString(e.ID) && !validName.MatchString(e.ID) {
 		return errors.New("快照 ID 无效")
+	}
+	if e.State != "" && e.State != "off" && e.State != "running" && e.State != "paused" {
+		return errors.New("快照运行状态无效")
+	}
+	if e.State != "" && !validNode.MatchString(e.ID) {
+		return errors.New("状态快照 ID 无效")
 	}
 	if _, ok := s.Layers[e.Disk]; !ok {
 		return errors.New("快照磁盘不在磁盘链清单中")
@@ -335,6 +379,15 @@ func (s *Store) Save() error {
 		"name": "Unique user-visible recovery-point name.", "created": "Creation time in Unix seconds.", "disk": "Read-only recovery-point disk leaf.",
 		"parent": "Parent recovery-point ID; absent for a root.", "legacy": "Imported full-copy snapshot without firmware or RAM.",
 		"snapshot": "Recovery point being created.", "child": "Proposed writable differencing leaf.",
+		"pending_restore": "Interrupted disk and firmware restore; roll back before a cold boot or cleanup.",
+		"previous_active": "Original writable disk retained until restore commits.", "previous_current": "Original parent recovery point.",
+		"restore_firmware": "Whether this restore replaces firmware; an absent backup means no original firmware existed.",
+		"firmware_backup":  "Original firmware retained until successful restore or rollback.",
+		"previous_state":   "Original RAM, device and firmware state retained until restore commits.",
+		"reverting":        "Original disk selected; reload the original RAM before clearing the restore journal.",
+		"state":            "Saved power state; running and paused include RAM and devices; absent means legacy disk only.",
+		"adapters":         "Stable saved virtual NIC device identifiers, in enabled NIC order.",
+		"macs":             "Saved endpoint MAC addresses, in the same NIC order.",
 	}
 	var annotate func(*yaml.Node)
 	annotate = func(n *yaml.Node) {
@@ -373,8 +426,8 @@ func (s *Store) Save() error {
 
 func (s *Store) CheckFiles(names ...string) error {
 	for _, name := range names {
-		if !safeFile(name) {
-			return errors.New("虚拟机磁盘路径无效")
+		if !safeArtifact(name) {
+			return errors.New("虚拟机存储路径无效")
 		}
 		path := s.Dir
 		parts := strings.Split(name, "/")

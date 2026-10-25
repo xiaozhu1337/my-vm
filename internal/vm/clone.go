@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"my-vm/internal/checkpoint"
 	"my-vm/internal/hcs"
 )
 
@@ -37,9 +38,16 @@ func NewClone(source Machine, machines []Machine) Machine {
 	}
 }
 
-// Clone copies only offline persistent state. Runtime state and snapshots belong
-// to the original machine; guest OS identities must be prepared before networking.
-func (m *Manager) Clone(source, target Machine, progress func(int64, int64)) (err error) {
+const CloneCurrent = "@current"
+
+// Clone retains the default for machines without snapshots; otherwise selection is required.
+func (m *Manager) Clone(source, target Machine, progress func(int64, int64)) error {
+	return m.CloneFrom(source, target, "", progress)
+}
+
+// CloneFrom materializes one selected disk state without changing the source branch.
+// A clone boots independently; saved RAM remains bound to the source VM's device identities.
+func (m *Manager) CloneFrom(source, target Machine, snapshot string, progress func(int64, int64)) (err error) {
 	if err = requireHCS(source); err != nil {
 		return err
 	}
@@ -65,7 +73,29 @@ func (m *Manager) Clone(source, target Machine, progress func(int64, int64)) (er
 	if err != nil {
 		return err
 	}
-	if err = storage.CheckFiles(storage.Chain()...); err != nil {
+	if snapshot == "" && len(storage.Entries) > 0 {
+		return errors.New("此虚拟机存在快照，请指定复制来源：@current（当前工作状态）或快照名称/ID")
+	}
+	disk := storage.Active
+	var selected *checkpoint.Entry
+	if snapshot != "" && snapshot != CloneCurrent {
+		entry, found := storage.Find(snapshot)
+		for _, candidate := range storage.Entries {
+			if candidate.ID == snapshot {
+				entry, found = candidate, true
+				break
+			}
+		}
+		if !found {
+			return errors.New("指定的复制来源快照不存在")
+		}
+		disk, selected = entry.Disk, &entry
+	}
+	var chain []string
+	for path := disk; path != ""; path = storage.Layers[path] {
+		chain = append(chain, path)
+	}
+	if err = storage.CheckFiles(chain...); err != nil {
 		return err
 	}
 	folder := filepath.Dir(DiskPath(m.Root, target))
@@ -85,13 +115,25 @@ func (m *Manager) Clone(source, target Machine, progress func(int64, int64)) (er
 			}
 		}
 	}()
-	if len(storage.Chain()) > 1 {
-		err = hcs.ExportDisk(context.Background(), DiskPath(m.Root, target), storage.Path(storage.Active), progress)
+	if len(chain) > 1 {
+		err = hcs.ExportDisk(context.Background(), DiskPath(m.Root, target), storage.Path(disk), progress)
 	} else {
-		err = copyExclusive(storage.Path(storage.Active), DiskPath(m.Root, target), progress)
+		err = copyExclusive(storage.Path(disk), DiskPath(m.Root, target), progress)
 	}
 	if err != nil {
 		return err
+	}
+	if snapshot != "" && snapshot != CloneCurrent {
+		if selected.State != "" {
+			file := "state-" + selected.ID + ".vmgs"
+			if err = storage.CheckFiles(file); err != nil {
+				return err
+			}
+			if err = copyExclusive(storage.Path(file), filepath.Join(folder, "guest.vmgs"), nil); err != nil {
+				return err
+			}
+		}
+		return hcs.ResetDiskIdentity(DiskPath(m.Root, target))
 	}
 	guestState := filepath.Join(filepath.Dir(DiskPath(m.Root, source)), "guest.vmgs")
 	if _, err = os.Stat(guestState); err == nil {

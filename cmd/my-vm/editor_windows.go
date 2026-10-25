@@ -170,6 +170,9 @@ func (a *application) editor(c *ui.Context) {
 	}
 	pageHeading(c, title, description)
 	scrollBody(c, "editor-"+a.draft.ID, func() {
+		if a.cloneSource != nil {
+			a.cloneStateEditor(c)
+		}
 		card(c, "基本信息", "使用容易辨认的名称来管理不同的工作环境。", func() {
 			field(c, "虚拟机名称", &a.draft.Name)
 			options, labels := make([]string, 0, len(vm.GuestSystems)), map[string]string{}
@@ -190,8 +193,12 @@ func (a *application) editor(c *ui.Context) {
 					components.NumberInput(c, &a.cpu, 1, 256, 1).Label("虚拟 CPU 数量").FillWidth()
 				})
 				ui.Column(c).Key("memory").Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
-					text(c, "内存 / MiB")
-					components.NumberInput(c, &a.memory, 256, 1048576, 256).Label("内存 MiB").FillWidth()
+					text(c, "默认内存 / MiB")
+					components.NumberInput(c, &a.memory, 256, 1048576, 256).Label("默认内存 MiB").FillWidth()
+				})
+				ui.Column(c).Key("max-memory").Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
+					text(c, "最大内存 / MiB")
+					components.NumberInput(c, &a.maxMemory, 256, 1048576, 256).Label("最大内存 MiB").FillWidth()
 				})
 				ui.Column(c).Key("disk").Grow(1).Basis(0).MinWidth(0).Gap(8).Disabled(!a.creating || a.cloneSource != nil).Children(func() {
 					text(c, "磁盘 / GiB")
@@ -199,14 +206,14 @@ func (a *application) editor(c *ui.Context) {
 				})
 			})
 			infoRow(c, "虚拟化引擎", "Hyper-V HCS / 硬件虚拟化")
-			memoryLabel := "内存按需分配：关闭"
+			memoryLabel := "内存回收与热调整：关闭"
 			if a.draft.DynamicMemory {
-				memoryLabel = "内存按需分配：开启"
+				memoryLabel = "内存回收与热调整：开启"
 			}
 			if button(c, memoryLabel, true) {
 				a.draft.DynamicMemory = !a.draft.DynamicMemory
 			}
-			muted(c, "开启后允许 HCS 按需分配，并可在运行中调整内存。客户机需支持 Hyper-V 内存集成。")
+			muted(c, "默认值用于启动，最大值限制运行中的手动调整。开启回收后，支持的客户机可归还不用的宿主内存页面；容量不会自动增长到最大值。")
 			gpuLabel := "GPU 共享：关闭"
 			if a.draft.GPUShared {
 				gpuLabel = "GPU 共享：开启"
@@ -264,7 +271,8 @@ func (a *application) editor(c *ui.Context) {
 		if action(c, "取消", true, components.ButtonGhost) && a.leavePage() {
 			a.page = ""
 		}
-		if action(c, saveLabel, true, components.ButtonPrimary) {
+		canSave := a.cloneSource == nil || a.cloneSnapshotsLoaded && a.cloneSnapshot != "" && !a.diskBusy(a.cloneSource.ID)
+		if action(c, saveLabel, canSave, components.ButtonPrimary) {
 			a.saveDraft()
 		}
 	})

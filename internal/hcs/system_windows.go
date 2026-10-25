@@ -141,6 +141,20 @@ func (s *System) Action(name string) error {
 	_, err := operation(name, s.handle, options)
 	return err
 }
+func (s *System) Save(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handle == 0 {
+		return fmt.Errorf("虚拟机已关闭")
+	}
+	options, err := json.Marshal(map[string]string{"SaveType": "ToFile", "SaveStateFilePath": path})
+	if err != nil {
+		return err
+	}
+	_, err = operation("HcsSaveComputeSystem", s.handle, wide(string(options)))
+	return err
+}
+
 func (s *System) Modify(resource string, settings any) error {
 	return s.ModifyRequest(resource, "Update", settings)
 }

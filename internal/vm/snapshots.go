@@ -20,6 +20,7 @@ type Snapshot struct {
 	ParentID, ParentName string
 	Depth                int
 	Current, Legacy      bool
+	State                string
 }
 
 func (m *Manager) Snapshots(_ string, machine Machine) ([]Snapshot, error) {
@@ -40,7 +41,7 @@ func (m *Manager) Snapshots(_ string, machine Machine) ([]Snapshot, error) {
 		if e.Parent != "" {
 			depth = depths[e.Parent] + 1
 		}
-		result = append(result, Snapshot{ID: e.ID, Name: e.Name, DateSeconds: e.Created, ParentID: e.Parent, ParentName: names[e.Parent], Depth: depth, Current: storage.Current == e.ID, Legacy: e.Legacy})
+		result = append(result, Snapshot{ID: e.ID, Name: e.Name, DateSeconds: e.Created, ParentID: e.Parent, ParentName: names[e.Parent], Depth: depth, Current: storage.Current == e.ID, Legacy: e.Legacy, State: e.State})
 		names[e.ID], depths[e.ID] = e.Name, depth
 	}
 	return result, nil
@@ -48,9 +49,28 @@ func (m *Manager) Snapshots(_ string, machine Machine) ([]Snapshot, error) {
 
 // storage reconciles an interrupted native backing-file switch before any disk operation.
 func (m *Manager) storage(machine Machine) (*checkpoint.Store, error) {
+	return m.loadStorage(machine, false)
+}
+
+func (m *Manager) loadStorage(machine Machine, restoring bool) (*checkpoint.Store, error) {
 	storage, err := checkpoint.Load(filepath.Dir(DiskPath(m.Root, machine)))
 	if err != nil {
 		return nil, err
+	}
+	if storage.Restoring != nil && !restoring {
+		m.mu.Lock()
+		s := m.sessions[machine.ID]
+		m.mu.Unlock()
+		if s != nil && s.disk == storage.Active {
+			err = m.finishSnapshotRestore(storage)
+		} else if s != nil {
+			err = errors.New("快照恢复尚未完成，请关机后重试以回退磁盘和固件")
+		} else {
+			err = m.rollbackSnapshotRestore(storage, machine)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	if storage.Pending == nil {
 		m.collect(storage)
@@ -64,11 +84,14 @@ func (m *Manager) storage(machine Machine) (*checkpoint.Store, error) {
 		if s.disk != pending.Child {
 			return nil, errors.New("上次在线快照的结果尚未确认；虚拟机继续运行，请关机后重新读取快照以核对磁盘链")
 		}
+		if err = storage.CheckFiles(pending.Entry.StateFiles()...); err != nil {
+			return nil, err
+		}
 		storage.CommitFork()
 	} else {
 		if err = storage.CheckFiles(pending.Child); errors.Is(err, os.ErrNotExist) {
 			storage.Pending = nil
-			storage.Retire(pending.Child)
+			storage.Retire(append(pending.Entry.StateFiles(), pending.Child)...)
 		} else if err != nil {
 			return nil, err
 		} else {
@@ -78,8 +101,11 @@ func (m *Manager) storage(machine Machine) (*checkpoint.Store, error) {
 			}
 			if parent == "" {
 				storage.Pending = nil
-				storage.Retire(pending.Child)
+				storage.Retire(append(pending.Entry.StateFiles(), pending.Child)...)
 			} else if strings.EqualFold(filepath.Clean(parent), filepath.Clean(storage.Path(pending.Entry.Disk))) {
+				if err = storage.CheckFiles(pending.Entry.StateFiles()...); err != nil {
+					return nil, err
+				}
 				storage.CommitFork()
 			} else {
 				return nil, errors.New("未完成快照的父盘不匹配，已保留所有磁盘并阻止启动")
@@ -157,7 +183,7 @@ func (m *Manager) SnapshotContext(ctx context.Context, machine Machine, action, 
 			return errors.New("快照不存在")
 		}
 		storage.Remove(entry.ID)
-		storage.Retire()
+		storage.Retire(entry.StateFiles()...)
 		if err = storage.Save(); err != nil {
 			return err
 		}
@@ -171,7 +197,7 @@ func (m *Manager) SnapshotContext(ctx context.Context, machine Machine, action, 
 	}
 }
 
-func (m *Manager) createSnapshot(ctx context.Context, machine Machine, storage *checkpoint.Store, name string, progress func(int64, int64)) error {
+func (m *Manager) createSnapshot(ctx context.Context, machine Machine, storage *checkpoint.Store, name string, progress func(int64, int64)) (err error) {
 	if err := storage.CheckFork(storage.Active); err != nil {
 		return err
 	}
@@ -182,7 +208,13 @@ func (m *Manager) createSnapshot(ctx context.Context, machine Machine, storage *
 	if err != nil {
 		return err
 	}
-	entry.Disk, entry.Parent = storage.Active, storage.Current
+	entry.Disk, entry.Parent, entry.State = storage.Active, storage.Current, "off"
+	m.mu.Lock()
+	s := m.sessions[machine.ID]
+	m.mu.Unlock()
+	if err = snapshotSessionEntry(s, &entry); err != nil {
+		return err
+	}
 	id, err := checkpoint.NewID()
 	if err != nil {
 		return err
@@ -193,9 +225,26 @@ func (m *Manager) createSnapshot(ctx context.Context, machine Machine, storage *
 	if err = storage.Save(); err != nil {
 		return err
 	}
-	m.mu.Lock()
-	s := m.sessions[machine.ID]
-	m.mu.Unlock()
+	resume, captureErr := m.captureSnapshotState(ctx, machine, storage, entry, s)
+	defer func() {
+		if resumeErr := resume(); resumeErr != nil {
+			m.mu.Lock()
+			if s != nil {
+				s.paused = true
+			}
+			m.mu.Unlock()
+			err = errors.Join(err, fmt.Errorf("快照操作后继续运行失败，请手动继续虚拟机: %w", resumeErr))
+		}
+	}()
+	if captureErr != nil {
+		storage.Pending = nil
+		storage.Retire(append(entry.StateFiles(), child)...)
+		if cleanupErr := storage.Save(); cleanupErr != nil {
+			return errors.Join(captureErr, cleanupErr)
+		}
+		m.collect(storage)
+		return captureErr
+	}
 	if s != nil {
 		err = hcs.ForkDisk(ctx, storage.Path(storage.Active), storage.Path(child), "my-vm-"+machine.ID, func(done, total int64) {
 			if progress != nil && total > 0 {
@@ -236,6 +285,11 @@ func (m *Manager) restoreSnapshot(ctx context.Context, machine Machine, storage 
 	if err := storage.CheckFiles(entry.Disk); err != nil {
 		return err
 	}
+	if entry.State != "" {
+		if _, err := loadSnapshotMachine(machine, storage, entry); err != nil {
+			return err
+		}
+	}
 	id, err := checkpoint.NewID()
 	if err != nil {
 		return err
@@ -245,8 +299,9 @@ func (m *Manager) restoreSnapshot(ctx context.Context, machine Machine, storage 
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	// Journal the unused candidate before creating it, so a crash cannot orphan it.
-	storage.Retire(child)
+	// Journal unused artifacts before creating them, so a crash cannot orphan them.
+	backupName := "state-" + id + ".vmgs"
+	storage.Retire(child, backupName, "state-"+id+".vmrs", "state-"+id+".yaml")
 	if err = storage.Save(); err != nil {
 		return err
 	}
@@ -268,50 +323,66 @@ func (m *Manager) restoreSnapshot(ctx context.Context, machine Machine, storage 
 	m.mu.Lock()
 	previous := m.sessions[machine.ID]
 	m.mu.Unlock()
+	guest := storage.Path("guest.vmgs")
+	restore := &checkpoint.Restore{Active: storage.Active, Current: storage.Current, Firmware: entry.State != ""}
+	resume := func() error { return nil }
 	if previous != nil {
-		if err = m.stopSnapshotSession(machine.ID, previous); err != nil {
+		rollback := checkpoint.Entry{ID: id, Name: "rollback", Disk: storage.Active}
+		if err = snapshotSessionEntry(previous, &rollback); err != nil {
+			return err
+		}
+		resume, err = m.captureSnapshotState(ctx, previous.machine, storage, rollback, previous)
+		if err != nil {
+			return errors.Join(err, resume())
+		}
+		restore.Rollback, restore.Firmware, restore.Backup = &rollback, true, backupName
+	} else if restore.Firmware {
+		if err = copyState(guest, storage.Path(backupName), false); err == nil {
+			restore.Backup = backupName
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
-	oldActive, oldCurrent := storage.Active, storage.Current
+	storage.Restoring = restore
 	storage.Active, storage.Current = child, entry.ID
 	storage.Layers[child] = entry.Disk
-	storage.Garbage = slices.DeleteFunc(storage.Garbage, func(name string) bool { return name == child })
+	storage.Garbage = slices.DeleteFunc(storage.Garbage, func(name string) bool {
+		return name == child || name == backupName || (restore.Rollback != nil && slices.Contains(restore.Rollback.StateFiles(), name))
+	})
 	if err = storage.Save(); err != nil {
-		if previous != nil {
-			err = errors.Join(err, m.restartSnapshotSession(previous))
-		}
-		return err
+		return errors.Join(err, resume())
 	}
 	committed = true
+	if previous != nil {
+		if err = m.stopSnapshotSession(machine.ID, previous); err != nil {
+			storage.Active, storage.Current, storage.Restoring = restore.Active, restore.Current, nil
+			storage.Retire(restore.Rollback.StateFiles()...)
+			err = errors.Join(err, storage.Save(), resume())
+			return err
+		}
+	}
 	if progress != nil {
 		progress(65, 100)
 	}
-	if previous != nil {
-		if err = m.start(machine); err != nil {
-			// Keep the abandoned branch until the target has started, so failure can restore it.
-			storage.Active, storage.Current = oldActive, oldCurrent
-			if rollback := storage.Save(); rollback != nil {
-				return errors.Join(err, fmt.Errorf("回退磁盘清单失败，原盘仍保留: %w", rollback))
-			}
-			retry := m.restartSnapshotSession(previous)
-			storage.Retire()
-			if cleanupErr := storage.Save(); cleanupErr == nil {
-				m.collect(storage)
-			} else {
-				retry = errors.Join(retry, cleanupErr)
-			}
-			return errors.Join(fmt.Errorf("快照启动失败，已回退当前磁盘: %w", err), retry)
-		}
-		if err = m.restoreSnapshotSessionState(previous); err != nil {
-			return err
+	var startErr error
+	switch entry.State {
+	case "running", "paused":
+		startErr = m.startWithState(machine, &entry)
+	case "off":
+		startErr = copyState(snapshotStatePath(storage, entry, "vmgs"), guest, true)
+	default:
+		if previous != nil {
+			startErr = m.restartSnapshotSession(previous)
 		}
 	}
-	storage.Retire()
-	if err = storage.Save(); err != nil {
-		return fmt.Errorf("快照已恢复，记录待清理磁盘失败: %w", err)
+	if startErr != nil {
+		// Preserve the journal and firmware backup until rollback has durably completed.
+		retry := m.rollbackSnapshotRestore(storage, machine)
+		return errors.Join(fmt.Errorf("快照恢复失败，原磁盘和固件已保留: %w", startErr), retry)
 	}
-	m.collect(storage)
+	if err = m.finishSnapshotRestore(storage); err != nil {
+		return fmt.Errorf("快照已恢复，保存完成记录失败；原磁盘及固件仍保留: %w", err)
+	}
 	if progress != nil {
 		progress(100, 100)
 	}
@@ -319,7 +390,7 @@ func (m *Manager) restoreSnapshot(ctx context.Context, machine Machine, storage 
 }
 
 func (m *Manager) restartSnapshotSession(previous *session) error {
-	if err := m.start(previous.machine); err != nil {
+	if err := m.startSession(previous.machine, nil, true); err != nil {
 		return err
 	}
 	return m.restoreSnapshotSessionState(previous)

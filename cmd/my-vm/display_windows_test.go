@@ -13,7 +13,7 @@ func TestViewGuestHardwareSettings(t *testing.T) {
 	if a.draft.GuestOS != "ubuntu26" || a.config.Machines[0].GuestOS != "windows10" || a.draft.DesktopMode() != "wayland" {
 		t.Fatal("guest selection changed saved config")
 	}
-	click(t, tt, "内存按需分配：开启")
+	click(t, tt, "内存回收与热调整：开启")
 	click(t, tt, "GPU 共享：关闭")
 	if a.draft.DynamicMemory || !a.draft.GPUShared || !a.hasUnsavedChanges() {
 		t.Fatal("hardware draft not updated")

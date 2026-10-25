@@ -201,16 +201,36 @@ func TestSnapshotBranchesCloneCurrentLeafAndRecoverJournal(t *testing.T) {
 	if err != nil || len(list) != 3 || list[1].ParentID != list[2].ParentID || list[2].Depth != 1 || !list[2].Current {
 		t.Fatal("branch tree incorrect", list, err)
 	}
-	target := NewClone(machine, []Machine{machine})
-	if err = manager.Clone(machine, target, nil); err != nil {
-		t.Fatal(err)
+	s = load()
+	marker = 44
+	diskMarker(t, s.Path(s.Active), &marker)
+	for _, selection := range []struct {
+		state string
+		want  byte
+	}{{"baseline", 11}, {list[1].ID, 22}, {list[2].ID, 33}, {CloneCurrent, 44}} {
+		target := NewClone(machine, []Machine{machine})
+		if err = manager.CloneFrom(machine, target, selection.state, nil); err != nil {
+			t.Fatal(selection.state, err)
+		}
+		if got := diskMarker(t, DiskPath(manager.Root, target), nil); got != selection.want {
+			t.Fatal("clone copied the wrong snapshot", selection.state, got, selection.want)
+		}
+		if parent, err := hcs.DiskParent(DiskPath(manager.Root, target)); err != nil || parent != "" {
+			t.Fatal("clone depends on source snapshot chain", parent, err)
+		}
 	}
-	if got := diskMarker(t, DiskPath(manager.Root, target), nil); got != 33 {
-		t.Fatal("clone copied an old ancestor", got)
+	invalid := NewClone(machine, []Machine{machine})
+	if err = manager.CloneFrom(machine, invalid, "deleted", nil); err == nil {
+		t.Fatal("unknown snapshot accepted")
 	}
-	if parent, err := hcs.DiskParent(DiskPath(manager.Root, target)); err != nil || parent != "" {
-		t.Fatal("clone depends on source snapshot chain", parent, err)
+	if _, err = os.Stat(filepath.Dir(DiskPath(manager.Root, invalid))); !os.IsNotExist(err) {
+		t.Fatal("unknown snapshot created a target", err)
 	}
+	if current := load(); current.Active != s.Active || current.Current != s.Current || len(current.Entries) != 3 {
+		t.Fatal("clone changed the source branch", current)
+	}
+	marker = 33
+	diskMarker(t, s.Path(s.Active), &marker)
 	if err = manager.Snapshot("", machine, "-d", "baseline", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -399,6 +419,9 @@ func TestHCSLifecycle(t *testing.T) {
 	}
 	folder := filepath.Dir(DiskPath(manager.Root, machine))
 	for _, failAt := range []int64{25, 65} {
+		manager.mu.Lock()
+		beforeRestore := manager.sessions[machine.ID]
+		manager.mu.Unlock()
 		var handle windows.Handle
 		err = manager.Snapshot("", machine, "-a", "first_live", func(done, total int64) {
 			if done != failAt || handle != 0 {
@@ -423,6 +446,12 @@ func TestHCSLifecycle(t *testing.T) {
 		}
 		if err == nil || handle == 0 || manager.State(machine.ID) != "已暂停" {
 			t.Fatalf("failed restore at %d did not keep the previous VM paused: state=%s err=%v", failAt, manager.State(machine.ID), err)
+		}
+		manager.mu.Lock()
+		afterRestore := manager.sessions[machine.ID]
+		manager.mu.Unlock()
+		if !slices.Equal(afterRestore.adapterIDs, beforeRestore.adapterIDs) {
+			t.Fatal("restore failure cold booted instead of loading the original execution state")
 		}
 	}
 	if err = manager.Control(machine.ID, "cont"); err != nil {

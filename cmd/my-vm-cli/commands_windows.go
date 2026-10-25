@@ -209,6 +209,7 @@ func (c *commands) action(args []string) (vm.Request, error) {
 			return bad("create <machine.yaml> | update <VM> <machine.yaml>")
 		}
 		machine := vm.NewMachine()
+		machine.MaxMemoryMiB = 0 // Preserve legacy imports that omit the new ceiling.
 		if args[0] == "update" {
 			request.VM = args[1]
 			if err := c.connect(); err != nil {
@@ -236,10 +237,16 @@ func (c *commands) action(args []string) (vm.Request, error) {
 		}
 		request.Machine = &machine
 	case "clone":
-		if len(args) != 3 {
-			return bad("clone <VM> <new-name>")
+		if len(args) != 3 && len(args) != 4 {
+			return bad("clone <VM> <new-name> [@current|snapshot-name-or-ID]")
 		}
 		request.VM, request.Name = args[1], args[2]
+		if len(args) == 4 {
+			request.Snapshot = args[3]
+			if request.Snapshot == "" {
+				return bad("复制来源不能为空")
+			}
+		}
 	case "snapshot":
 		if len(args) < 3 {
 			return bad("snapshot list|create|restore|delete <VM> [name]")

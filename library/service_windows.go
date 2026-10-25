@@ -190,7 +190,7 @@ func (s *Service) Execute(ctx context.Context, r Request) (value any, err error)
 		}
 		report, finish := s.track(machine.ID, "clone", target.ID)
 		defer finish()
-		if err := s.runtime.Clone(machine, target, report); err != nil {
+		if err := s.runtime.CloneFrom(machine, target, r.Snapshot, report); err != nil {
 			return nil, err
 		}
 		return target, s.register(target)

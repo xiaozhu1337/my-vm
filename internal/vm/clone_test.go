@@ -85,8 +85,14 @@ func TestClonePreservesSourceAndCopiesPersistentState(t *testing.T) {
 	}
 	originalID := diskIdentity(t, DiskPath(manager.Root, source))
 	target := NewClone(source, []Machine{source})
+	if err = manager.Clone(source, target, nil); err == nil {
+		t.Fatal("snapshot source accepted without an explicit selection")
+	}
+	if _, statErr := os.Stat(filepath.Dir(DiskPath(manager.Root, target))); !os.IsNotExist(statErr) {
+		t.Fatal("missing selection created a target", statErr)
+	}
 	var copied, total int64
-	if err := manager.Clone(source, target, func(done, size int64) { copied, total = done, size }); err != nil {
+	if err := manager.CloneFrom(source, target, CloneCurrent, func(done, size int64) { copied, total = done, size }); err != nil {
 		t.Fatal(err)
 	}
 	if total == 0 || copied != total {

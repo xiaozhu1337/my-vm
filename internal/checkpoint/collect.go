@@ -20,9 +20,26 @@ func (s *Store) liveFiles() map[string]bool {
 	disk(s.Active)
 	for _, e := range s.Entries {
 		disk(e.Disk)
+		for _, file := range e.StateFiles() {
+			live[file] = true
+		}
+	}
+	if s.Restoring != nil {
+		disk(s.Restoring.Active)
+		if s.Restoring.Backup != "" {
+			live[s.Restoring.Backup] = true
+		}
+		if s.Restoring.Rollback != nil {
+			for _, file := range s.Restoring.Rollback.StateFiles() {
+				live[file] = true
+			}
+		}
 	}
 	if s.Pending != nil {
 		disk(s.Pending.Child)
+		for _, file := range s.Pending.Entry.StateFiles() {
+			live[file] = true
+		}
 	}
 	return live
 }

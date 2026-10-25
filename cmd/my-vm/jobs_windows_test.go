@@ -64,8 +64,8 @@ func TestSnapshotResultsBelongToMachineAndRequest(t *testing.T) {
 		t.Fatal("deleted snapshot remained selected")
 	}
 	a.resetSnapshots()
-	if a.snapshotSelected != "" || a.snapshotTree.Ready() {
-		t.Fatal("navigation retained another tree's selection or camera")
+	if a.snapshotSelected != "" || a.snapshotTree.X != 0 || a.snapshotTree.Y != 0 {
+		t.Fatal("navigation retained another tree's selection or scroll position")
 	}
 }
 
@@ -175,10 +175,35 @@ func TestCloneOpensEditorWithIndependentDraft(t *testing.T) {
 	if a.cloneSource == nil || a.cloneSource.ID != source.ID || a.draft.ID == source.ID || a.draft.Network != "none" || !tt.HasText("创建独立副本") {
 		t.Fatal("clone draft did not preserve source and isolate new identity")
 	}
+	a.finishOperation(source.ID, "读取复制来源", nil, nil)
 	click(t, tt, "取消")
 	chooseMachineAction(t, tt, source.Name, "编辑配置")
 	if a.cloneSource != nil || a.draft.ID != source.ID || a.creating {
 		t.Fatal("clone mode leaked into regular editing")
+	}
+}
+
+func TestCloneSelectionRequiresExplicitSnapshotAndRejectsOldResults(t *testing.T) {
+	a := testApplication(t, 2)
+	source := a.config.Machines[0]
+	a.edit(vm.NewClone(source, a.config.Machines), true)
+	a.cloneSource = &source
+	version := a.editVersion
+	points := []vm.Snapshot{{ID: "saved", Name: "before-update", Current: true}}
+	if !a.acceptCloneSnapshots(source.ID, version, points) || !a.cloneSnapshotsLoaded || a.cloneSnapshot != "" {
+		t.Fatal("snapshot source silently selected")
+	}
+	if a.acceptCloneSnapshots(a.config.Machines[1].ID, version, nil) || a.cloneSnapshot != "" {
+		t.Fatal("another source replaced the selection")
+	}
+	a.edit(source, false)
+	if a.acceptCloneSnapshots(source.ID, version, points) || a.cloneSource != nil || a.cloneSnapshotsLoaded {
+		t.Fatal("canceled clone accepted an old result")
+	}
+	a.edit(vm.NewClone(source, a.config.Machines), true)
+	a.cloneSource = &source
+	if a.acceptCloneSnapshots(source.ID, version, points) || !a.acceptCloneSnapshots(source.ID, a.editVersion, nil) || a.cloneSnapshot != vm.CloneCurrent {
+		t.Fatal("reopened editor accepted stale snapshots or empty source was not usable")
 	}
 }
 

@@ -53,6 +53,38 @@ func TestCommandMappings(t *testing.T) {
 	}
 }
 
+func TestCloneSourceCommandMappings(t *testing.T) {
+	c := &commands{}
+	for _, state := range []string{"@current", "before-update", "ac53b22f6612ef42d12047faf06c4299"} {
+		request, err := c.action([]string{"clone", "VM", "Copy", state})
+		if err != nil || request.Snapshot != state || request.Action != "clone" || request.Name != "Copy" {
+			t.Fatal(request, err)
+		}
+	}
+	for _, args := range [][]string{{"clone", "VM", "Copy", ""}, {"clone", "VM", "Copy", "@current", "extra"}} {
+		if _, err := c.action(args); err == nil {
+			t.Fatal("accepted malformed clone selection", args)
+		}
+	}
+}
+
+func TestCreateImportsLegacyMemoryCeiling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.yaml")
+	for _, maximum := range []int{0, 32768} {
+		data := "memory_mib: 16384\n"
+		if maximum != 0 {
+			data += "max_memory_mib: 32768\n"
+		}
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		request, err := (&commands{}).action([]string{"create", path})
+		if err != nil || request.Machine.Validate() != nil || request.Machine.MaxMemoryMiB != maximum {
+			t.Fatal("legacy memory limit changed", request.Machine, err)
+		}
+	}
+}
+
 func TestStructuredConfigurationWorkflow(t *testing.T) {
 	root := t.TempDir()
 	machine := vm.NewMachine()

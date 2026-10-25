@@ -48,7 +48,7 @@ func snapshotDiagram(snapshots []vm.Snapshot) flow.Data {
 
 func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {
 	if !off {
-		muted(c, "支持运行中创建和删除差分快照；恢复会重启客户机，不保留内存和未保存的操作。")
+		muted(c, "运行中创建快照会短暂暂停，保存内存、设备、固件和磁盘；恢复后继续快照时的状态。GPU 共享需先关机。")
 	}
 	if a.diskBusy(m.ID) {
 		muted(c, "这台虚拟机正在处理磁盘，请在状态栏查看进度；仍可切换和管理其他虚拟机。")
@@ -59,18 +59,11 @@ func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {
 				muted(c, fmt.Sprintf("共 %d 个快照", len(a.snapshots)))
 			}
 			ui.Spacer(c)
-			if button(c, "放大", a.snapshotsLoaded) {
-				a.snapshotTree.ZoomIn()
-			}
-			if button(c, "缩小", a.snapshotsLoaded) {
-				a.snapshotTree.ZoomOut()
-			}
-			if button(c, "显示全树", a.snapshotsLoaded) {
-				a.snapshotTree.Fit()
-			}
 			if button(c, "定位当前", a.snapshotsLoaded) {
 				a.snapshotSelected = snapshotCurrent
-				a.snapshotTree.Reveal(snapshotCurrent)
+				positions, _, _ := snapshotLayout(snapshotDiagram(a.snapshots))
+				position := positions[snapshotCurrent]
+				a.snapshotTree.X, a.snapshotTree.Y = position.x-16, position.y-16
 			}
 			if button(c, "刷新", !a.diskBusy(m.ID)) {
 				a.refreshSnapshots(m)
@@ -81,11 +74,8 @@ func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {
 			muted(c, "点击刷新读取快照，虚拟机运行期间也可查看。")
 			return
 		}
-		flow.View(c, &a.snapshotTree, snapshotDiagram(a.snapshots), flow.Options{
-			Label: "虚拟机快照树", Height: 320, Direction: flow.LeftToRight,
-			Selected: a.snapshotSelected, Select: func(id string) { a.snapshotSelected = id },
-		}).Background(c.Theme().Background).Border(1, c.Theme().Border).Radius(8)
-		muted(c, "点击节点查看详情；拖动空白处平移，滚轮缩放，也可用 Tab 和回车选择节点。")
+		a.fixedSnapshotTree(c, snapshotDiagram(a.snapshots))
+		muted(c, "节点大小固定，滚动查看分支；点击节点查看详情，也可用 Tab 和回车选择节点。")
 		if len(a.snapshots) == 0 {
 			muted(c, "还没有快照")
 		}
@@ -98,7 +88,7 @@ func (a *application) snapshotView(c *ui.Context, m vm.Machine, off bool) {
 				a.snapshot(m, "-c", a.snapshotName)
 			}
 		})
-		muted(c, "名称以英文字母开头，可含数字、下划线和连字符，最多 64 个字符。快照只保存磁盘，不含内存和固件状态。")
+		muted(c, "名称以英文字母开头，可含数字、下划线和连字符，最多 64 个字符。关机快照保存磁盘与固件；运行或暂停快照还保存内存和设备。")
 	})
 }
 
@@ -126,6 +116,13 @@ func (a *application) snapshotDetails(c *ui.Context, m vm.Machine) {
 			infoRow(c, "父快照", p)
 			if selected.Current {
 				muted(c, "当前位置从此快照继续；恢复会放弃其后的磁盘更改。")
+			}
+			if selected.State == "running" || selected.State == "paused" {
+				infoRow(c, "保存内容", "磁盘、固件、内存和设备状态")
+			} else if selected.State == "off" {
+				infoRow(c, "保存内容", "磁盘与固件（关机状态）")
+			} else {
+				muted(c, "历史磁盘快照，不含内存和固件；恢复后需要重新启动客户机。")
 			}
 			if selected.Legacy {
 				muted(c, "旧版完整磁盘快照")

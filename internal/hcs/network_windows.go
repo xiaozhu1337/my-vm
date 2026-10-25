@@ -110,4 +110,30 @@ func (e *Endpoint) Close() error {
 	hr, _, _ := network.NewProc("HcnDeleteEndpoint").Call(uintptr(unsafe.Pointer(&e.ID)), uintptr(unsafe.Pointer(&detail)))
 	return check("HcnDeleteEndpoint", hr, resultText(detail))
 }
+func (e *Endpoint) MACAddress() (string, error) {
+	var handle uintptr
+	var detail *uint16
+	hr, _, _ := network.NewProc("HcnOpenEndpoint").Call(uintptr(unsafe.Pointer(&e.ID)), uintptr(unsafe.Pointer(&handle)), uintptr(unsafe.Pointer(&detail)))
+	if err := check("HcnOpenEndpoint", hr, resultText(detail)); err != nil {
+		return "", err
+	}
+	defer network.NewProc("HcnCloseEndpoint").Call(handle)
+	var properties *uint16
+	detail = nil
+	hr, _, _ = network.NewProc("HcnQueryEndpointProperties").Call(handle, uintptr(unsafe.Pointer(wide(`{}`))), uintptr(unsafe.Pointer(&properties)), uintptr(unsafe.Pointer(&detail)))
+	data, msg := resultText(properties), resultText(detail)
+	if err := check("HcnQueryEndpointProperties", hr, msg); err != nil {
+		return "", err
+	}
+	var value struct{ MacAddress string }
+	if err := json.Unmarshal([]byte(data), &value); err != nil {
+		return "", err
+	}
+	address, err := net.ParseMAC(value.MacAddress)
+	if err != nil || len(address) != 6 {
+		return "", fmt.Errorf("HCN 未返回有效的网卡 MAC 地址")
+	}
+	return address.String(), nil
+}
+
 func (e *Endpoint) String() string { return strings.Trim(e.ID.String(), "{}") }
